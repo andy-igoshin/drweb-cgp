@@ -1,0 +1,18 @@
+#!/bin/bash
+
+export GOPATH="${HOME}/src/drweb-cgp"
+
+# если на целевой ОС не совпадает glibc, то собираем без зависимостей.
+# результирующий файл, возможно, получится медленнее и большего размера.
+export CGO_ENABLED=0
+
+if   [ "$1" == "fmt" ]; then
+    go fmt $*
+elif [ "$1" == "tidy" ]; then
+    go mod tidy
+elif [ "$1" == "vet" ]; then
+    echo "vet..."
+    go vet
+else
+    go build
+fi
