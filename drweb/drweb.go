@@ -8,10 +8,15 @@ import (
 
 func Scan(seq int, filename string) {
 
-	qid, h, err := cgp.Message(filename)
+	qid, h, seen, err := cgp.Message(filename)
 	defer h.Close()
 	if err != nil {
 		cgp.Failure(seq, qid, err)
+		return
+	}
+
+	if seen {
+		cgp.OkSeen(seq, qid)
 		return
 	}
 
@@ -29,7 +34,11 @@ func Scan(seq int, filename string) {
 
 	case clamd.Found:
 		cgp.Putline("* %d [%d]: %s\n", seq, qid, r[0].Raw)
-		cgp.Discard(seq)
+		if config.MirrorDiscard() {
+			cgp.MirrorTo(seq, qid, filename, config.MirrorTo())
+		} else {
+			cgp.Discard(seq)
+		}
 
 	case clamd.Error:
 		cgp.Failure(seq, qid, err)

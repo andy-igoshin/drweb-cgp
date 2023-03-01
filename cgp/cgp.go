@@ -2,12 +2,18 @@ package cgp
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
 )
+
+const recvHdr = "Received:"
+const seenHdr = "X-DrWeb-Seen:"
 
 var protocol int
 
@@ -36,7 +42,7 @@ func Intf(seq int, ver string) {
 	Putline("%d INTF %d\n", seq, protocol)
 }
 
-func Message(filename string) (qid int, h *os.File, err error) {
+func Message(filename string) (qid int, h *os.File, seen bool, err error) {
 
 	qid, err = strconv.Atoi((filename)[strings.LastIndexByte(filename, '/')+1 : strings.LastIndexByte(filename, '.')])
 	if err != nil {
@@ -66,6 +72,15 @@ func Message(filename string) (qid int, h *os.File, err error) {
 		}
 	}
 
+	seen, err = isSeen(m)
+	if err != nil {
+		return
+	}
+
+	if seen {
+		return
+	}
+
 	_, err = h.Seek(pos, os.SEEK_SET)
 	if err != nil {
 		return
@@ -74,9 +89,7 @@ func Message(filename string) (qid int, h *os.File, err error) {
 	return
 }
 
-func MirrorTo(seq int, to []string, headers []string, mirrorDiscard bool) {
-
-	hdrs := replaceSpecChars(strings.Join(headers, "\n"))
+func MirrorTo(seq int, qid int, filename string, to []string) {
 
 	if protocol >= 4 {
 
@@ -87,22 +100,28 @@ func MirrorTo(seq int, to []string, headers []string, mirrorDiscard bool) {
 				mirrorTo = append(mirrorTo, fmt.Sprintf("MIRRORTO \"%s\"", m))
 			}
 
-			if mirrorDiscard {
-				Putline("%d %s DISCARD\n", seq, strings.Join(mirrorTo, " "))
+			seenHdr, err := makeSeen(filename)
+			if err != nil {
+				Failure(seq, qid, err)
 			} else {
-				Putline("%d %s ADDHEADER \"%s\" OK\n", seq, strings.Join(mirrorTo, " "), hdrs)
+				Putline("%d ADDHEADER \"%s\" %s DISCARD\n", seq, seenHdr, strings.Join(mirrorTo, " "))
 			}
 
 		} else {
-			Putline("%d ADDHEADER \"%s\" OK\n", seq, hdrs)
+			Discard(seq)
 		}
 
 	} else {
-		Putline("%d ADDHEADER \"%s\"\n", seq, hdrs)
+		Discard(seq)
 	}
 }
 
 func Ok(seq int) {
+	Putline("%d OK\n", seq)
+}
+
+func OkSeen(seq, qid int) {
+	Putline("* %d [%d]: Already seen by DrWeb\n", seq, qid)
 	Putline("%d OK\n", seq)
 }
 
@@ -113,6 +132,197 @@ func Putline(format string, a ...interface{}) {
 
 func Reject(seq int) {
 	Putline("%d REJECT Try again later\n", seq)
+}
+
+func getHeader(m *bufio.Reader) (hdr string, err error) {
+
+	var c byte
+	var line []byte
+
+	var b strings.Builder
+	b.Grow(384)
+
+	for {
+		c, err = m.ReadByte()
+		if err == io.EOF {
+			if c == 0 {
+				break
+			} else {
+				err = nil
+			}
+		}
+		if err != nil {
+			return
+		}
+
+		if b.Len() == 0 {
+
+			if c == ' ' || c == '\t' {
+				err = m.UnreadByte()
+				if err != nil {
+					return
+				}
+				err = fmt.Errorf("bad header")
+				return
+
+			} else if c == '\n' {
+
+				b.WriteByte(c)
+				break
+
+			} else {
+
+				b.WriteByte(c)
+
+				line, err = m.ReadSlice('\n')
+				if err == io.EOF {
+					err = nil
+				}
+				if err != nil {
+					return
+				}
+
+				b.Write(line)
+			}
+
+		} else {
+
+			if c == ' ' || c == '\t' {
+
+				b.WriteByte(c)
+
+				line, err = m.ReadSlice('\n')
+				if err == io.EOF {
+					err = nil
+				}
+				if err != nil {
+					return
+				}
+
+				b.Write(line)
+
+			} else {
+				err = m.UnreadByte()
+				if err != nil {
+					return
+				}
+				break
+			}
+		}
+	}
+
+	hdr = b.String()
+
+	return
+}
+
+func isSeen(m *bufio.Reader) (seen bool, err error) {
+
+	var found bool
+	var hdr string
+	var seenSum string
+
+	for {
+
+		hdr, err = getHeader(m)
+		if err == io.EOF {
+			err = nil
+			if len(hdr) == 0 {
+				break
+			}
+		}
+		if err != nil {
+			return
+		}
+
+		if hdr == "\n" {
+			// конец заголовка
+			break
+		}
+
+		if !found {
+
+			if seenSum, found = strings.CutPrefix(hdr, seenHdr); found {
+				seenSum = strings.TrimSpace(seenSum)
+			}
+
+		} else if strings.HasPrefix(hdr, recvHdr) {
+
+			sum := fmt.Sprintf("%x", sha256.Sum224([]byte(nospace(hdr))))
+			if seenSum == sum {
+				seen = true
+			}
+
+			break
+		}
+	}
+
+	return
+}
+
+func makeSeen(filename string) (seenhdr string, err error) {
+
+	var h *os.File
+	var hdr string
+	var line []byte
+
+	h, err = os.Open(filename)
+	if err != nil {
+		return
+	}
+	defer h.Close()
+
+	m := bufio.NewReader(h)
+
+	for {
+		line, err = m.ReadSlice('\n')
+		if err != nil {
+			return
+		}
+
+		if string(line) == "\n" {
+			break
+		}
+	}
+
+	for {
+
+		hdr, err = getHeader(m)
+		if err == io.EOF {
+			err = nil
+			if len(hdr) == 0 {
+				break
+			}
+		}
+		if err != nil {
+			return
+		}
+
+		if hdr == "\n" {
+			break
+		}
+
+		if strings.HasPrefix(hdr, recvHdr) {
+			seenhdr = fmt.Sprintf("%s %x", seenHdr, sha256.Sum224([]byte(nospace(hdr))))
+			break
+		}
+	}
+
+	return
+}
+
+func nospace(s string) string {
+
+	var b strings.Builder
+	b.Grow(len(s))
+
+	for _, c := range s {
+		if !unicode.IsSpace(c) {
+			b.WriteRune(c)
+		}
+	}
+
+	return b.String()
 }
 
 func replaceSpecChars(msg string) string {

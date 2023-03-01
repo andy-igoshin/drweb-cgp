@@ -7,10 +7,12 @@ import (
 )
 
 type Config struct {
-	Debug     bool
-	Host      string
-	Transport string
-	Timeout   time.Duration
+	Debug         bool
+	Host          string
+	MirrorDiscard bool
+	MirrorTo      []string
+	Transport     string
+	Timeout       time.Duration
 }
 
 const (
@@ -36,8 +38,11 @@ func New() *Config {
 
 	config := new(Config)
 
+	var mirrorTo string
+
 	flag.BoolVar(&config.Debug, "debug", false, "Export debug information (for developers)")
 	flag.StringVar(&config.Host, "host", "/run/.com.drweb.clamd", "DrWeb host to connect")
+	flag.StringVar(&mirrorTo, "mirror-to", "", "Mirror selected messages to email")
 	flag.DurationVar(&config.Timeout, "timeout", 180*time.Second, "DrWeb request timeout")
 
 	flag.Parse()
@@ -48,11 +53,24 @@ func New() *Config {
 		config.Transport = TrTcp
 	}
 
+	if len(mirrorTo) > 0 {
+		config.MirrorDiscard = true
+		config.MirrorTo = strings.Split(strings.ReplaceAll(mirrorTo, " ", ""), ",")
+	}
+
 	if config.Timeout < time.Second {
 		config.Timeout *= time.Second
 	}
 
 	return config
+}
+
+func MirrorDiscard() bool {
+	return config.MirrorDiscard
+}
+
+func MirrorTo() []string {
+	return config.MirrorTo
 }
 
 func Timeout() time.Duration {

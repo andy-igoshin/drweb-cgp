@@ -2,7 +2,7 @@
     DrWeb helper for CommuniGate Pro 5.x, 6.x
 
     Copyright (C) 2023 Andrey Igoshin <ai@vsu.ru>
-    Version 1.0.0
+    Version 1.1.0
 
     https://git.vsu.ru/ai/drweb-cgp
 
