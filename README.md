@@ -12,5 +12,7 @@
             Export debug information (for developers)
       -host string
             DrWeb host to connect (default "/run/.com.drweb.clamd")
+      -mirror-to string
+            Mirror selected messages to email
       -timeout duration
             DrWeb request timeout (default 3m0s)
