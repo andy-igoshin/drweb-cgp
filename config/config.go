@@ -20,6 +20,8 @@ const (
 	TrTcp  = "tcp"
 )
 
+const port = ":3310"
+
 var config *Config
 
 func init() {
@@ -51,6 +53,10 @@ func New() *Config {
 		config.Transport = TrUnix
 	} else {
 		config.Transport = TrTcp
+
+		if !strings.Contains(config.Host, ":") {
+			config.Host += port
+		}
 	}
 
 	if len(mirrorTo) > 0 {
