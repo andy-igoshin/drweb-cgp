@@ -65,7 +65,7 @@ func Scan(seq int, filename string) {
 		if config.Debug() {
 			cgp.SaveBadFile(seq, qid, filename)
 		}
-		cgp.Failure(seq, qid, err)
+		cgp.Failure(seq, qid, fmt.Errorf("%s", r[0].Msg))
 
 	default:
 		if config.Debug() {
