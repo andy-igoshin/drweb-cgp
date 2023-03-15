@@ -1,6 +1,8 @@
 package drweb
 
 import (
+	"fmt"
+
 	"git.vsu.ru/ai/drweb-cgp/cgp"
 	"git.vsu.ru/ai/drweb-cgp/clamd"
 	"git.vsu.ru/ai/drweb-cgp/config"
@@ -26,6 +28,16 @@ func Scan(seq int, filename string) {
 		r, err = clamd.Fildes(h)
 	} else {
 		r, err = clamd.InStream(h)
+	}
+
+	if err != nil {
+		cgp.Failure(seq, qid, err)
+		return
+	}
+
+	if len(r) == 0 {
+		cgp.Failure(seq, qid, fmt.Errorf("incorrect response"))
+		return
 	}
 
 	switch r[0].Status {
