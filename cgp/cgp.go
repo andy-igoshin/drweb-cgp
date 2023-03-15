@@ -14,6 +14,7 @@ import (
 
 const recvHdr = "Received:"
 const seenHdr = "X-DrWeb-Seen:"
+const badFiles = "BadFiles"
 
 var protocol int
 
@@ -132,6 +133,13 @@ func Putline(format string, a ...interface{}) {
 
 func Reject(seq int) {
 	Putline("%d REJECT Try again later\n", seq)
+}
+
+func SaveBadFile(seq, qid int, filename string) {
+	err := os.Link(filename, fmt.Sprintf("%s/%d.msg.debug", badFiles, qid))
+	if err != nil {
+		Putline("* %d [%d]: debug: %s\n", seq, qid, err)
+	}
 }
 
 func getHeader(m *bufio.Reader) (hdr string, err error) {
