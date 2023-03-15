@@ -71,7 +71,6 @@ func Scan(seq int, filename string) {
 		if config.Debug() {
 			cgp.SaveBadFile(seq, qid, filename)
 		}
-		cgp.Putline("* %d [%d]: %s\n", seq, qid, err)
 		cgp.Failure(seq, qid, err)
 	}
 }
