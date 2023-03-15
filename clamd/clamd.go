@@ -27,7 +27,6 @@ type Response struct {
 	Filename  string
 	Signature string
 	Status    Status
-	Msg       string
 	Raw       string
 }
 
@@ -174,7 +173,6 @@ func processResponse(tc *textproto.Conn) (r []Response, err error) {
 		case "ERROR":
 			res.Filename = rs[0]
 			res.Status = Error
-			res.Msg = strings.Join(rs[0:len(rs)-1], " ")
 
 		default:
 			res.Status = Unknown
