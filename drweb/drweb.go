@@ -33,19 +33,15 @@ func Scan(seq int, filename string) {
 		r, err = clamd.InStream(h)
 	}
 
-	if err != nil {
-		if config.Debug() {
-			cgp.SaveBadFile(seq, qid, filename)
-		}
-		cgp.Failure(seq, qid, err)
-		return
-	}
-
 	if len(r) == 0 {
 		if config.Debug() {
 			cgp.SaveBadFile(seq, qid, filename)
 		}
-		cgp.Failure(seq, qid, fmt.Errorf("incorrect response"))
+		if err != nil {
+			cgp.Failure(seq, qid, fmt.Errorf("incorrect response: %s", err))
+		} else {
+			cgp.Failure(seq, qid, fmt.Errorf("incorrect response"))
+		}
 		return
 	}
 
