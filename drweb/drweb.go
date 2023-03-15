@@ -13,6 +13,9 @@ func Scan(seq int, filename string) {
 	qid, h, seen, err := cgp.Message(filename)
 	defer h.Close()
 	if err != nil {
+		if config.Debug() {
+			cgp.SaveBadFile(seq, qid, filename)
+		}
 		cgp.Failure(seq, qid, err)
 		return
 	}
@@ -31,11 +34,17 @@ func Scan(seq int, filename string) {
 	}
 
 	if err != nil {
+		if config.Debug() {
+			cgp.SaveBadFile(seq, qid, filename)
+		}
 		cgp.Failure(seq, qid, err)
 		return
 	}
 
 	if len(r) == 0 {
+		if config.Debug() {
+			cgp.SaveBadFile(seq, qid, filename)
+		}
 		cgp.Failure(seq, qid, fmt.Errorf("incorrect response"))
 		return
 	}
@@ -53,9 +62,15 @@ func Scan(seq int, filename string) {
 		}
 
 	case clamd.Error:
+		if config.Debug() {
+			cgp.SaveBadFile(seq, qid, filename)
+		}
 		cgp.Failure(seq, qid, err)
 
 	default:
+		if config.Debug() {
+			cgp.SaveBadFile(seq, qid, filename)
+		}
 		cgp.Putline("* %d [%d]: %s\n", seq, qid, err)
 		cgp.Failure(seq, qid, err)
 	}
