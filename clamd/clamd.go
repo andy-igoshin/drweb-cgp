@@ -2,7 +2,6 @@ package clamd
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"net/textproto"
@@ -176,7 +175,6 @@ func processResponse(tc *textproto.Conn) (r []Response, err error) {
 
 		default:
 			res.Status = Unknown
-			err = fmt.Errorf("Invalid server response: %s", res.Raw)
 		}
 
 		r = append(r, res)
