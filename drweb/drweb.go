@@ -11,7 +11,9 @@ import (
 func Scan(seq int, filename string) {
 
 	qid, h, seen, err := cgp.Message(filename)
-	defer h.Close()
+	if h != nil {
+		defer h.Close()
+	}
 	if err != nil {
 		if config.Debug() {
 			cgp.SaveBadFile(seq, qid, filename)
