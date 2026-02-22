@@ -64,10 +64,6 @@ func New() *Config {
 		config.MirrorTo = strings.Split(strings.ReplaceAll(mirrorTo, " ", ""), ",")
 	}
 
-	if config.Timeout < time.Second {
-		config.Timeout *= time.Second
-	}
-
 	return config
 }
 
