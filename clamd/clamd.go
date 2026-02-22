@@ -31,7 +31,6 @@ type Response struct {
 
 const (
 	chunkSize   = 1024
-	cmdTimeout  = 1 * time.Minute
 	connTimeout = 5 * time.Second
 )
 
@@ -58,7 +57,7 @@ func Fildes(h *os.File) (r []Response, err error) {
 	id := tc.Next()
 	tc.StartRequest(id)
 
-	conn.SetDeadline(time.Now().Add(cmdTimeout))
+	conn.SetDeadline(time.Now().Add(config.Timeout()))
 
 	err = fildesScan(tc, conn, h)
 	if err != nil {
@@ -71,8 +70,6 @@ func Fildes(h *os.File) (r []Response, err error) {
 
 	tc.StartResponse(id)
 	defer tc.EndResponse(id)
-
-	conn.SetReadDeadline(time.Now().Add(config.Timeout()))
 
 	r, err = processResponse(tc)
 
@@ -94,7 +91,7 @@ func InStream(h *os.File) (r []Response, err error) {
 	id := tc.Next()
 	tc.StartRequest(id)
 
-	conn.SetDeadline(time.Now().Add(cmdTimeout))
+	conn.SetDeadline(time.Now().Add(config.Timeout()))
 
 	err = streamScan(tc, h)
 	if err != nil {
@@ -108,38 +105,33 @@ func InStream(h *os.File) (r []Response, err error) {
 	tc.StartResponse(id)
 	defer tc.EndResponse(id)
 
-	conn.SetReadDeadline(time.Now().Add(config.Timeout()))
-
 	r, err = processResponse(tc)
 
 	return
 }
 
-func fildesScan(tc *textproto.Conn, conn net.Conn, h *os.File) (err error) {
+func fildesScan(tc *textproto.Conn, conn net.Conn, h *os.File) error {
 
-	var sf *os.File
-
-	_, err = tc.W.Write([]byte("nFILDES\n"))
-	if err != nil {
-		return
+	if _, err := tc.W.Write([]byte("nFILDES\n")); err != nil {
+		return err
 	}
 	tc.W.Flush()
 
-	s := conn.(*net.UnixConn)
-	if sf, err = s.File(); err != nil {
-		return
-	}
-	defer sf.Close()
-
-	sock := int(sf.Fd())
-	fds := []int{int(h.Fd())}
-	rights := syscall.UnixRights(fds...)
-	err = syscall.Sendmsg(sock, nil, rights, nil, 0)
+	rc, err := conn.(*net.UnixConn).SyscallConn()
 	if err != nil {
-		return
+		return err
 	}
 
-	return
+	rights := syscall.UnixRights(int(h.Fd()))
+
+	var sendErr error
+	err = rc.Control(func(fd uintptr) {
+		sendErr = syscall.Sendmsg(int(fd), nil, rights, nil, 0)
+	})
+	if err != nil {
+		return err
+	}
+	return sendErr
 }
 
 func processResponse(tc *textproto.Conn) (r []Response, err error) {
