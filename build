@@ -8,6 +8,8 @@ export CGO_ENABLED=0
 
 if   [ "$1" == "fmt" ]; then
     go fmt $*
+elif [ "$1" == "fix" ]; then
+    go fix -diff ./...
 elif [ "$1" == "tidy" ]; then
     go mod tidy
 elif [ "$1" == "vet" ]; then
