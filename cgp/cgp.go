@@ -45,7 +45,13 @@ func Intf(seq int, ver string) {
 
 func Message(filename string) (qid int, h *os.File, seen bool, err error) {
 
-	qid, err = strconv.Atoi((filename)[strings.LastIndexByte(filename, '/')+1 : strings.LastIndexByte(filename, '.')])
+	start := strings.LastIndexByte(filename, '/') + 1
+	end := strings.LastIndexByte(filename, '.')
+	if end <= start {
+		err = fmt.Errorf("invalid filename: %s", filename)
+		return
+	}
+	qid, err = strconv.Atoi(filename[start:end])
 	if err != nil {
 		return
 	}
