@@ -69,6 +69,9 @@ func Message(filename string) (qid int, h *os.File, seen bool, err error) {
 	for {
 		line, err = m.ReadSlice('\n')
 		if err != nil {
+			if err == io.EOF {
+				err = fmt.Errorf("unexpected end of message")
+			}
 			return
 		}
 
@@ -88,7 +91,7 @@ func Message(filename string) (qid int, h *os.File, seen bool, err error) {
 		return
 	}
 
-	_, err = h.Seek(pos, os.SEEK_SET)
+	_, err = h.Seek(pos, io.SeekStart)
 	if err != nil {
 		return
 	}
@@ -291,6 +294,9 @@ func makeSeen(filename string) (seenhdr string, err error) {
 	for {
 		line, err = m.ReadSlice('\n')
 		if err != nil {
+			if err == io.EOF {
+				err = fmt.Errorf("unexpected end of message")
+			}
 			return
 		}
 
