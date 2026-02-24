@@ -10,6 +10,10 @@ if   [ "$1" == "fmt" ]; then
     go fmt $*
 elif [ "$1" == "fix" ]; then
     go fix -diff ./...
+elif [ "$1" == "test" ]; then
+    go test -v
+elif [ "$1" == "bench" ]; then
+    go test -bench=. -benchmem $2
 elif [ "$1" == "tidy" ]; then
     go mod tidy
 elif [ "$1" == "update" ]; then
