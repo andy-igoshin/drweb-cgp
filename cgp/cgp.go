@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"unicode"
+	"unicode/utf8"
 )
 
 const recvHdr = "Received:"
@@ -61,33 +62,16 @@ func Message(filename string) (qid int, h *os.File, seen bool, err error) {
 		return
 	}
 
-	var line []byte
-	var pos int64
-
 	m := bufio.NewReader(h)
 
-	for {
-		line, err = m.ReadSlice('\n')
-		if err != nil {
-			if err == io.EOF {
-				err = fmt.Errorf("unexpected end of message")
-			}
-			return
-		}
-
-		pos += int64(len(line))
-
-		if string(line) == "\n" {
-			break
-		}
-	}
-
-	seen, err = isSeen(m)
+	var pos int64
+	pos, err = skipCGPHeaders(m)
 	if err != nil {
 		return
 	}
 
-	if seen {
+	seen, err = isSeen(m)
+	if err != nil || seen {
 		return
 	}
 
@@ -151,203 +135,128 @@ func SaveBadFile(seq, qid int, filename string) {
 	}
 }
 
-func getHeader(m *bufio.Reader) (hdr string, err error) {
-
-	var c byte
-	var line []byte
-
+func getHeader(m *bufio.Reader) (string, error) {
 	var b strings.Builder
-	b.Grow(384)
+	b.Grow(1024)
 
 	for {
-		c, err = m.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				if c == 0 {
-					break
-				} else {
-					err = nil
-				}
-			} else {
-				return
+		line, err := m.ReadSlice('\n')
+		if err == nil {
+			// Успешно прочитали порцию до \n
+			b.Write(line)
+		} else if err == bufio.ErrBufferFull {
+			// Строка больше 4КБ. Пишем то, что влезло в буфер, и продолжаем
+			b.Write(line)
+			continue
+		} else {
+			// EOF или критическая ошибка
+			if len(line) > 0 {
+				b.Write(line)
 			}
+			if err == io.EOF {
+				break
+			}
+			return "", err
 		}
 
-		if b.Len() == 0 {
+		// Заглядываем вперед на предмет folding (пробел или таб)
+		next, err := m.Peek(1)
+		if err != nil {
+			break // EOF
+		}
 
-			if c == ' ' || c == '\t' {
-				err = m.UnreadByte()
-				if err != nil {
-					return
-				}
-				err = fmt.Errorf("bad header")
-				return
-
-			} else if c == '\n' {
-
-				b.WriteByte(c)
-				break
-
-			} else {
-
-				b.WriteByte(c)
-
-				line, err = m.ReadSlice('\n')
-				if err != nil {
-					if err == io.EOF {
-						err = nil
-					} else {
-						return
-					}
-				}
-
-				b.Write(line)
-			}
-
-		} else {
-
-			if c == ' ' || c == '\t' {
-
-				b.WriteByte(c)
-
-				line, err = m.ReadSlice('\n')
-				if err != nil {
-					if err == io.EOF {
-						err = nil
-					} else {
-						return
-					}
-				}
-
-				b.Write(line)
-
-			} else {
-				err = m.UnreadByte()
-				if err != nil {
-					return
-				}
-				break
-			}
+		if next[0] != ' ' && next[0] != '\t' {
+			// Следующая строка — новый заголовок
+			break
 		}
 	}
 
-	hdr = b.String()
+	return b.String(), nil
+}
 
-	return
+func hashReceived(s string) string {
+	h := sha256.New224()
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			if r < utf8.RuneSelf {
+				h.Write([]byte{byte(r)})
+			} else {
+				var buf [utf8.UTFMax]byte
+				n := utf8.EncodeRune(buf[:], r)
+				h.Write(buf[:n])
+			}
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func isSeen(m *bufio.Reader) (seen bool, err error) {
+    var found bool
+    var seenSum string
 
-	var found bool
-	var hdr string
-	var seenSum string
+    for {
+        hdr, err := getHeader(m)
+        if err != nil {
+            if err == io.EOF {
+                break
+            }
+            return false, fmt.Errorf("1: %v", err)
+        }
 
-	for {
-
-		hdr, err = getHeader(m)
-		if err != nil {
-			if err == io.EOF {
-				err = nil
-				if len(hdr) == 0 {
-					break
-				}
-			} else {
-				return
-			}
-		}
-
-		if hdr == "\n" {
+        if hdr == "\n" || hdr == "\r\n" {
 			// конец заголовка
-			break
-		}
+            break
+        }
 
-		if !found {
-
-			if seenSum, found = strings.CutPrefix(hdr, seenHdr); found {
-				seenSum = strings.TrimSpace(seenSum)
-			}
-
-		} else if strings.HasPrefix(hdr, recvHdr) {
-
-			sum := fmt.Sprintf("%x", sha256.Sum224([]byte(nospace(hdr))))
-			if seenSum == sum {
-				seen = true
-			}
-
-			break
-		}
-	}
-
-	return
+        if !found {
+            if val, ok := strings.CutPrefix(hdr, seenHdr); ok {
+                seenSum = strings.TrimSpace(val)
+                found = true
+            }
+        } else if strings.HasPrefix(hdr, recvHdr) {
+            if hashReceived(hdr) == seenSum {
+                seen = true
+            }
+            break
+        }
+    }
+    return seen, nil
 }
 
 func makeSeen(filename string) (seenhdr string, err error) {
-
-	var h *os.File
-	var hdr string
-	var line []byte
-
-	h, err = os.Open(filename)
+	h, err := os.Open(filename)
 	if err != nil {
-		return
+		return "", err
 	}
 	defer h.Close()
 
 	m := bufio.NewReader(h)
 
-	for {
-		line, err = m.ReadSlice('\n')
-		if err != nil {
-			if err == io.EOF {
-				err = fmt.Errorf("unexpected end of message")
-			}
-			return
-		}
-
-		if string(line) == "\n" {
-			break
-		}
+	if _, err := skipCGPHeaders(m); err != nil {
+		return "", err
 	}
 
 	for {
-
-		hdr, err = getHeader(m)
+		hdr, err := getHeader(m)
 		if err != nil {
 			if err == io.EOF {
-				err = nil
-				if len(hdr) == 0 {
-					break
-				}
-			} else {
-				return
+				break
 			}
+			return "", fmt.Errorf("read message header error: %v", err)
 		}
 
-		if hdr == "\n" {
+		if hdr == "\n" || hdr == "\r\n" {
+			// конец заголовка
 			break
 		}
 
 		if strings.HasPrefix(hdr, recvHdr) {
-			seenhdr = fmt.Sprintf("%s %x", seenHdr, sha256.Sum224([]byte(nospace(hdr))))
-			break
+			seenhdr = fmt.Sprintf("%s %s", seenHdr, hashReceived(hdr))
+			return seenhdr, nil
 		}
 	}
 
-	return
-}
-
-func nospace(s string) string {
-
-	var b strings.Builder
-	b.Grow(len(s))
-
-	for _, c := range s {
-		if !unicode.IsSpace(c) {
-			b.WriteRune(c)
-		}
-	}
-
-	return b.String()
+	return "", fmt.Errorf("no Received header found in message")
 }
 
 func replaceSpecChars(msg string) string {
@@ -385,4 +294,29 @@ func replaceSpecChars(msg string) string {
 	}
 
 	return sb.String()
+}
+
+func skipCGPHeaders(m *bufio.Reader) (int64, error) {
+	var pos int64
+	for {
+		line, err := m.ReadSlice('\n')
+		pos += int64(len(line))
+
+		if err == nil {
+			if (len(line) == 1 && line[0] == '\n') ||
+				(len(line) == 2 && line[0] == '\r' && line[1] == '\n') {
+				return pos, nil
+			}
+			continue
+		}
+
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+
+		if err == io.EOF {
+			return pos, fmt.Errorf("unexpected end of CGP headers")
+		}
+		return pos, err
+	}
 }
