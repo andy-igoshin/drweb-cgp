@@ -3,6 +3,7 @@ package cgp
 import (
 	"bufio"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -91,14 +92,14 @@ func MirrorTo(seq int, qid int, filename string, to []string) {
 
 			mirrorTo := []string{}
 			for _, m := range to {
-				mirrorTo = append(mirrorTo, fmt.Sprintf("MIRRORTO \"%s\"", m))
+				mirrorTo = append(mirrorTo, "MIRRORTO \""+m+"\"")
 			}
 
-			seenHdr, err := makeSeen(filename)
+			seenhdr, err := makeSeen(filename)
 			if err != nil {
 				Failure(seq, qid, err)
 			} else {
-				Putline("%d ADDHEADER \"%s\" %s DISCARD\n", seq, seenHdr, strings.Join(mirrorTo, " "))
+				Putline("%d ADDHEADER \"%s\" %s DISCARD\n", seq, seenhdr, strings.Join(mirrorTo, " "))
 			}
 
 		} else {
@@ -129,7 +130,7 @@ func Reject(seq int) {
 }
 
 func SaveBadFile(seq, qid int, filename string) {
-	err := os.Link(filename, fmt.Sprintf("%s/%d.msg.debug", badFiles, qid))
+	err := os.Link(filename, badFiles+"/"+strconv.Itoa(qid)+".msg.debug")
 	if err != nil {
 		Putline("* %d [%d]: debug: %s\n", seq, qid, err)
 	}
@@ -187,43 +188,44 @@ func hashReceived(s string) string {
 			}
 		}
 	}
-	return fmt.Sprintf("%x", h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func isSeen(m *bufio.Reader) (seen bool, err error) {
-    var found bool
-    var seenSum string
+	var found bool
+	var hdr string
+	var seenSum string
 
-    for {
-        hdr, err := getHeader(m)
-        if err != nil {
-            if err == io.EOF {
-                break
-            }
-            return false, fmt.Errorf("1: %v", err)
-        }
+	for {
+		hdr, err = getHeader(m)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return
+		}
 
-        if hdr == "\n" || hdr == "\r\n" {
+		if hdr == "\n" || hdr == "\r\n" {
 			// конец заголовка
-            break
-        }
+			break
+		}
 
-        if !found {
-            if val, ok := strings.CutPrefix(hdr, seenHdr); ok {
-                seenSum = strings.TrimSpace(val)
-                found = true
-            }
-        } else if strings.HasPrefix(hdr, recvHdr) {
-            if hashReceived(hdr) == seenSum {
-                seen = true
-            }
-            break
-        }
-    }
-    return seen, nil
+		if !found {
+			if val, ok := strings.CutPrefix(hdr, seenHdr); ok {
+				seenSum = strings.TrimSpace(val)
+				found = true
+			}
+		} else if strings.HasPrefix(hdr, recvHdr) {
+			if hashReceived(hdr) == seenSum {
+				seen = true
+			}
+			break
+		}
+	}
+	return
 }
 
-func makeSeen(filename string) (seenhdr string, err error) {
+func makeSeen(filename string) (string, error) {
 	h, err := os.Open(filename)
 	if err != nil {
 		return "", err
@@ -251,8 +253,7 @@ func makeSeen(filename string) (seenhdr string, err error) {
 		}
 
 		if strings.HasPrefix(hdr, recvHdr) {
-			seenhdr = fmt.Sprintf("%s %s", seenHdr, hashReceived(hdr))
-			return seenhdr, nil
+			return seenHdr + " " + hashReceived(hdr), nil
 		}
 	}
 
