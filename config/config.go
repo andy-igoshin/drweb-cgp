@@ -23,10 +23,10 @@ const (
 )
 
 type Config struct {
-	Debug         bool
-	Host          string
-	MirrorDiscard bool
-	MirrorTo      []string
+	debug         bool
+	host          string
+	mirrorDiscard bool
+	mirrorTo      []string
 	transport     TrType
 	timeout       time.Duration
 	version       bool
@@ -37,11 +37,11 @@ const port = ":3310"
 var configInstance *Config
 
 func Debug() bool {
-	return configInstance.Debug
+	return configInstance.debug
 }
 
 func Host() string {
-	return configInstance.Host
+	return configInstance.host
 }
 
 func GetVersion() string {
@@ -56,8 +56,8 @@ func New(args []string) (*Config, error) {
 
 	var mirrorTo string
 
-	fs.BoolVar(&c.Debug, "debug", false, "Export debug information (for developers)")
-	fs.StringVar(&c.Host, "host", "/run/.com.drweb.clamd", "DrWeb host to connect")
+	fs.BoolVar(&c.debug, "debug", false, "Export debug information (for developers)")
+	fs.StringVar(&c.host, "host", "/run/.com.drweb.clamd", "DrWeb host to connect")
 	fs.StringVar(&mirrorTo, "mirror-to", "", "Mirror selected messages to email")
 	fs.DurationVar(&c.timeout, "timeout", 180*time.Second, "DrWeb request timeout")
 	fs.BoolVar(&c.version, "version", false, "print version and exit")
@@ -74,30 +74,30 @@ func New(args []string) (*Config, error) {
 }
 
 func (c *Config) postProcess(mirrorTo string) error {
-	if strings.HasPrefix(c.Host, "/") {
+	if strings.HasPrefix(c.host, "/") {
 		c.transport = TrUnix
 	} else {
 		c.transport = TrTcp
-		if !strings.Contains(c.Host, ":") {
-			c.Host += port
+		if !strings.Contains(c.host, ":") {
+			c.host += port
 		}
 	}
 
 	if len(mirrorTo) > 0 {
-		c.MirrorDiscard = true
+		c.mirrorDiscard = true
 		cleanMirror := strings.ReplaceAll(mirrorTo, " ", "")
-		c.MirrorTo = strings.Split(cleanMirror, ",")
+		c.mirrorTo = strings.Split(cleanMirror, ",")
 	}
 
 	return nil
 }
 
 func MirrorDiscard() bool {
-	return configInstance.MirrorDiscard
+	return configInstance.mirrorDiscard
 }
 
 func MirrorTo() []string {
-	return configInstance.MirrorTo
+	return configInstance.mirrorTo
 }
 
 func Proto() string {
