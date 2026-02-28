@@ -72,7 +72,9 @@ func Fildes(h *os.File) ([]Response, error) {
 
 	err = raw.Control(func(fd uintptr) {
 		sendErr = syscall.Sendmsg(int(fd), cmdFILDES, nil, nil, 0)
-		if sendErr != nil { return }
+		if sendErr != nil {
+			return
+		}
 		sendErr = syscall.Sendmsg(int(fd), nil, rights, nil, 0)
 	})
 	if err != nil {

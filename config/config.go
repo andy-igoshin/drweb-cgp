@@ -1,8 +1,8 @@
 package config
 
 import (
-	"fmt"
 	"flag"
+	"fmt"
 	"strings"
 	"time"
 )
