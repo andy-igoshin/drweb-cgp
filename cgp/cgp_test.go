@@ -9,9 +9,15 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
-// --- Вспомогательные средства тестирования ---
+func readOutput(r *os.File) string {
+	var buf [8192]byte
+	r.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	n, _ := r.Read(buf[:])
+	return string(buf[:n])
+}
 
 func setupTestFd(t *testing.T) (*os.File, *os.File) {
 	r, w, err := os.Pipe()
@@ -21,14 +27,6 @@ func setupTestFd(t *testing.T) (*os.File, *os.File) {
 	stdoutFd = int(w.Fd())
 	return r, w
 }
-
-func readOutput(r *os.File) string {
-	var buf [8192]byte // С запасом для длинных выводов
-	n, _ := r.Read(buf[:])
-	return string(buf[:n])
-}
-
-// --- Тесты публичных функций ---
 
 func TestAddHeader(t *testing.T) {
 	r, w := setupTestFd(t)
@@ -133,29 +131,64 @@ func TestMessageAndIsSeenIntegration(t *testing.T) {
 	}
 }
 
-func TestMirrorTo(t *testing.T) {
-	r, w := setupTestFd(t)
-	defer r.Close()
-	defer w.Close()
+func TestMirrorTo_Integrated(t *testing.T) {
+	// Подготовка Pipe для захвата syscall.Write
+	r, w, _ := os.Pipe()
+	oldStdout := stdoutFd
+	stdoutFd = int(w.Fd())
+	defer func() { stdoutFd = oldStdout }()
 
-	tmpDir, _ := os.MkdirTemp("", "cgp_mirror")
+	tmpDir, _ := os.MkdirTemp("", "cgp_mirror_integrated")
 	defer os.RemoveAll(tmpDir)
 
-	fname := filepath.Join(tmpDir, "1.msg")
-	// Имитируем:
-	// 1. Заголовок CGP (P ...)
-	// 2. Пустая строка (разделитель)
-	// 3. Заголовок письма (Received)
-	content := "P 123 <addr>\n\nReceived: from test\n\n"
-	os.WriteFile(fname, []byte(content), 0644)
+	t.Run("Success_Mirroring", func(t *testing.T) {
+		fname := filepath.Join(tmpDir, "success.msg")
+		content := "P 123 <addr>\n\nReceived: from relay1\n\nBody"
+		os.WriteFile(fname, []byte(content), 0644)
 
-	protocol = 4
-	MirrorTo(505, 1, fname, []string{"user@remote.com"})
+		protocol = 4
+		MirrorTo(505, 1, fname, []string{"user@remote.com"})
 
-	got := readOutput(r)
-	if !strings.Contains(got, "ADDHEADER") || !strings.Contains(got, "MIRRORTO") || !strings.Contains(got, "DISCARD") {
-		t.Errorf("MirrorTo output mismatch: %q", got)
-	}
+		got := readOutput(r)
+		if strings.Count(got, "\n") != 1 {
+			t.Errorf("Expected exactly one newline for atomic response, got %d", strings.Count(got, "\n"))
+		}
+		if !strings.Contains(got, "ADDHEADER") || !strings.Contains(got, "MIRRORTO") || !strings.Contains(got, "DISCARD") {
+			t.Errorf("Chain missing components: %q", got)
+		}
+		if !strings.Contains(got, "X-DrWeb-Seen:") {
+			t.Error("X-DrWeb-Seen header was not generated")
+		}
+	})
+
+	t.Run("No_Received_Header", func(t *testing.T) {
+		fname := filepath.Join(tmpDir, "no_received.msg")
+		// Файл без Received — makeSeen должен споткнуться
+		content := "P 124 <addr>\n\nSubject: No Received\n\nBody"
+		os.WriteFile(fname, []byte(content), 0644)
+
+		MirrorTo(506, 2, fname, []string{"user@remote.com"})
+
+		got := readOutput(r)
+		// Ожидаем вызов Failure (две строки: * seq [qid]... и seq FAILURE)
+		if !strings.Contains(got, "FAILURE") {
+			t.Errorf("Expected FAILURE due to missing Received header, got: %q", got)
+		}
+	})
+
+	t.Run("Old_Protocol_Fallback", func(t *testing.T) {
+		fname := filepath.Join(tmpDir, "fallback.msg")
+		os.WriteFile(fname, []byte("..."), 0644)
+
+		protocol = 3 // Протокол < 4
+		MirrorTo(507, 3, fname, []string{"user@remote.com"})
+
+		got := readOutput(r)
+		// Для старых версий или пустого 'to' должен быть простой DISCARD
+		if !strings.Contains(got, "507 DISCARD") {
+			t.Errorf("Expected simple DISCARD for protocol < 4, got: %q", got)
+		}
+	})
 }
 
 func TestOk(t *testing.T) {
