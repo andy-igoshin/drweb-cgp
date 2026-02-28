@@ -2,27 +2,47 @@
 
 export GOPATH="${HOME}/src/drweb-cgp"
 
-# если на целевой ОС не совпадает glibc, то собираем без зависимостей.
-# результирующий файл, возможно, получится медленнее и большего размера.
+VERSION=$(git describe --tags --always 2>/dev/null || echo "manual")
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+# Путь к пакету, где лежат переменные
+PKG="git.vsu.ru/ai/drweb-cgp/config"
+
+LDFLAGS="-X '$PKG.Version=$VERSION' -X '$PKG.Commit=$COMMIT' -X '$PKG.BuildTime=$BUILD_TIME'"
+
 export CGO_ENABLED=0
 
-if   [ "$1" == "fmt" ]; then
-    go fmt $*
-elif [ "$1" == "fix" ]; then
-    go fix -diff ./...
-elif [ "$1" == "test" ]; then
-    go test -v
-elif [ "$1" == "bench" ]; then
-    go test -bench=. -benchmem $2
-elif [ "$1" == "tidy" ]; then
-    go mod tidy
-elif [ "$1" == "update" ]; then
-    echo "update..."
-    go get -u ./...
-    go mod tidy
-elif [ "$1" == "vet" ]; then
-    echo "vet..."
-    go vet
-else
-    go build
-fi
+case "$1" in
+    "fmt")
+        go fmt ./...
+        ;;
+    "fix")
+        go fix -diff ./...
+        ;;
+    "test")
+        go test -v ./...
+        ;;
+    "test-one")
+        go test -v -run "$2"
+        ;;
+    "bench")
+        go test -bench=. -benchmem -run=^#
+        ;;
+    "tidy")
+        go mod tidy
+        ;;
+    "update")
+        echo "Updating dependencies..."
+        go get -u ./...
+        go mod tidy
+        ;;
+    "vet")
+        echo "Running static analysis..."
+        go vet ./...
+        ;;
+    *)
+        echo "Building version $VERSION..."
+        go build -ldflags="$LDFLAGS" -o drweb-cgp
+        ;;
+esac
