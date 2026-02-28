@@ -1,9 +1,25 @@
 package config
 
 import (
+	"fmt"
 	"flag"
 	"strings"
 	"time"
+)
+
+// Эти значения будут перезаписаны при сборке через -ldflags
+var (
+	Version   = "dev"
+	Commit    = "none"
+	BuildTime = "unknown"
+)
+
+type TrType int
+
+const (
+	TrUnknown TrType = iota
+	TrUnix
+	TrTcp
 )
 
 type Config struct {
@@ -11,74 +27,98 @@ type Config struct {
 	Host          string
 	MirrorDiscard bool
 	MirrorTo      []string
-	Transport     string
-	Timeout       time.Duration
+	transport     TrType
+	timeout       time.Duration
+	version       bool
 }
-
-const (
-	TrUnix = "unix"
-	TrTcp  = "tcp"
-)
 
 const port = ":3310"
 
-var config *Config
-
-func init() {
-	config = New()
-}
+var configInstance *Config
 
 func Debug() bool {
-	return config.Debug
+	return configInstance.Debug
 }
 
 func Host() string {
-	return config.Host
+	return configInstance.Host
 }
 
-func New() *Config {
+func GetVersion() string {
+	return fmt.Sprintf("drweb-cgp helper\n  Version:  %s\n  Commit:   %s\n  Built:    %s\n",
+		Version, Commit, BuildTime)
+}
 
-	config := new(Config)
+func New(args []string) (*Config, error) {
+	c := &Config{}
+
+	fs := flag.NewFlagSet("drweb-cgp", flag.ContinueOnError)
 
 	var mirrorTo string
 
-	flag.BoolVar(&config.Debug, "debug", false, "Export debug information (for developers)")
-	flag.StringVar(&config.Host, "host", "/run/.com.drweb.clamd", "DrWeb host to connect")
-	flag.StringVar(&mirrorTo, "mirror-to", "", "Mirror selected messages to email")
-	flag.DurationVar(&config.Timeout, "timeout", 180*time.Second, "DrWeb request timeout")
+	fs.BoolVar(&c.Debug, "debug", false, "Export debug information (for developers)")
+	fs.StringVar(&c.Host, "host", "/run/.com.drweb.clamd", "DrWeb host to connect")
+	fs.StringVar(&mirrorTo, "mirror-to", "", "Mirror selected messages to email")
+	fs.DurationVar(&c.timeout, "timeout", 180*time.Second, "DrWeb request timeout")
+	fs.BoolVar(&c.version, "version", false, "print version and exit")
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
 
-	if strings.HasPrefix(config.Host, "/") {
-		config.Transport = TrUnix
+	if err := c.postProcess(mirrorTo); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
+
+func (c *Config) postProcess(mirrorTo string) error {
+	if strings.HasPrefix(c.Host, "/") {
+		c.transport = TrUnix
 	} else {
-		config.Transport = TrTcp
-
-		if !strings.Contains(config.Host, ":") {
-			config.Host += port
+		c.transport = TrTcp
+		if !strings.Contains(c.Host, ":") {
+			c.Host += port
 		}
 	}
 
 	if len(mirrorTo) > 0 {
-		config.MirrorDiscard = true
-		config.MirrorTo = strings.Split(strings.ReplaceAll(mirrorTo, " ", ""), ",")
+		c.MirrorDiscard = true
+		cleanMirror := strings.ReplaceAll(mirrorTo, " ", "")
+		c.MirrorTo = strings.Split(cleanMirror, ",")
 	}
 
-	return config
+	return nil
 }
 
 func MirrorDiscard() bool {
-	return config.MirrorDiscard
+	return configInstance.MirrorDiscard
 }
 
 func MirrorTo() []string {
-	return config.MirrorTo
+	return configInstance.MirrorTo
+}
+
+func Proto() string {
+	if configInstance.transport == TrUnix {
+		return "unix"
+	}
+	return "tcp"
+}
+
+func SetGlobal(c *Config) {
+	configInstance = c
+}
+
+func ShowVersion() bool {
+	return configInstance.version
 }
 
 func Timeout() time.Duration {
-	return config.Timeout
+	return configInstance.timeout
 }
 
-func Transport() string {
-	return config.Transport
+func Transport() TrType {
+	return configInstance.transport
 }

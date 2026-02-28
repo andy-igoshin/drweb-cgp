@@ -2,6 +2,7 @@ package cgp
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -9,40 +10,122 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
 
-const recvHdr = "Received:"
-const seenHdr = "X-DrWeb-Seen:"
 const badFiles = "BadFiles"
 
-var protocol int
+var (
+	protocol int
+	stdoutFd int
+	bRecvHdr = []byte("Received: ")
+	bSeenHdr = []byte("X-DrWeb-Seen: ")
+)
+
+var bufferPool = sync.Pool{
+	New: func() any { return bytes.NewBuffer(make([]byte, 0, 4096)) },
+}
 
 func AddHeader(seq int, headers []string) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer putBuffer(buf)
 
-	hdrs := replaceSpecChars(strings.Join(headers, "\n"))
+	buf.WriteString(strconv.Itoa(seq))
+	buf.WriteString(" ADDHEADER \"")
+
+	for i, h := range headers {
+		replaceSpecCharsBuf(buf, h)
+		if i < len(headers)-1 {
+			buf.WriteString("\\e")
+		}
+	}
 
 	if protocol >= 4 {
-		Putline("%d ADDHEADER \"%s\" OK\n", seq, hdrs)
+		buf.WriteString("\" OK")
 	} else {
-		Putline("%d ADDHEADER \"%s\"\n", seq, hdrs)
+		buf.WriteString("\"")
 	}
+
+	res := buf.Bytes()
+	length := len(res)
+
+	if length > 4096 || (length == 4096 && res[length-1] != '\n') {
+		Failure(seq, 0, fmt.Errorf("AddHeader: result exceeds 4k limit"))
+		return
+	}
+
+	if length > 0 && res[length-1] != '\n' {
+		buf.WriteByte('\n')
+		res = buf.Bytes()
+	}
+
+	syscall.Write(stdoutFd, res)
 }
 
 func Discard(seq int) {
-	Putline("%d DISCARD\n", seq)
+	var buf [64]byte
+	b := strconv.AppendInt(buf[:0], int64(seq), 10)
+	b = append(b, " DISCARD\n"...)
+	syscall.Write(stdoutFd, b)
 }
 
 func Failure(seq, qid int, err error) {
-	Putline("* %d [%d]: %s\n", seq, qid, err)
-	Putline("%d FAILURE\n", seq)
+	var buf [512]byte
+	b := buf[:0]
+
+	b = append(b, "* "...)
+	b = strconv.AppendInt(b, int64(seq), 10)
+	b = append(b, " ["...)
+	b = strconv.AppendInt(b, int64(qid), 10)
+	b = append(b, "]: "...)
+	if err != nil {
+		b = append(b, err.Error()...)
+	} else {
+		b = append(b, "unknown error"...)
+	}
+
+	length := len(b)
+	if length > 0 && b[length-1] != '\n' {
+		b = append(b, '\n')
+	}
+	syscall.Write(stdoutFd, b)
+
+	b = buf[:0]
+	b = strconv.AppendInt(b, int64(seq), 10)
+	b = append(b, " FAILURE\n"...)
+	syscall.Write(stdoutFd, b)
+}
+
+// InitStdoutFd инициализирует системный дескриптор для ответов серверу.
+// Вызывать в самом начале main().
+func InitStdoutFd() error {
+	rawConn, err := os.Stdout.SyscallConn()
+	if err != nil {
+		return err
+	}
+
+	err = rawConn.Control(func(fd uintptr) {
+		stdoutFd = int(fd)
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func Intf(seq int, ver string) {
 	protocol, _ = strconv.Atoi(ver)
-	Putline("%d INTF %d\n", seq, protocol)
+	var buf [64]byte
+	b := strconv.AppendInt(buf[:0], int64(seq), 10)
+	b = append(b, " INTF "...)
+	b = append(b, strconv.FormatInt(int64(protocol), 10)...)
+	b = append(b, '\n')
+	syscall.Write(stdoutFd, b)
 }
 
 func Message(filename string) (qid int, h *os.File, seen bool, err error) {
@@ -64,7 +147,6 @@ func Message(filename string) (qid int, h *os.File, seen bool, err error) {
 	}
 
 	m := bufio.NewReader(h)
-
 	var pos int64
 	pos, err = skipCGPHeaders(m)
 	if err != nil {
@@ -77,149 +159,206 @@ func Message(filename string) (qid int, h *os.File, seen bool, err error) {
 	}
 
 	_, err = h.Seek(pos, io.SeekStart)
-	if err != nil {
-		return
-	}
 
 	return
 }
 
 func MirrorTo(seq int, qid int, filename string, to []string) {
-
-	if protocol >= 4 {
-
-		if len(to) > 0 {
-
-			mirrorTo := []string{}
-			for _, m := range to {
-				mirrorTo = append(mirrorTo, "MIRRORTO \""+m+"\"")
-			}
-
-			seenhdr, err := makeSeen(filename)
-			if err != nil {
-				Failure(seq, qid, err)
-			} else {
-				Putline("%d ADDHEADER \"%s\" %s DISCARD\n", seq, seenhdr, strings.Join(mirrorTo, " "))
-			}
-
-		} else {
-			Discard(seq)
-		}
-
-	} else {
+	if protocol < 4 || len(to) == 0 {
 		Discard(seq)
+		return
 	}
+
+	seenhdr, err := makeSeen(filename)
+	if err != nil {
+		Failure(seq, qid, err)
+		return
+	}
+
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer putBuffer(buf)
+
+	buf.WriteString(strconv.Itoa(seq))
+	buf.WriteString(" ADDHEADER \"")
+
+	replaceSpecCharsBuf(buf, seenhdr)
+	buf.WriteString("\"")
+
+	for _, m := range to {
+		buf.WriteString(" MIRRORTO \"")
+		replaceSpecCharsBuf(buf, m)
+		buf.WriteString("\"")
+	}
+
+	buf.WriteString(" DISCARD")
+
+	res := buf.Bytes()
+	length := len(res)
+
+	if length > 4096 || (length == 4096 && res[length-1] != '\n') {
+		Failure(seq, qid, fmt.Errorf("MirrorTo: result exceeds 4k limit"))
+		return
+	}
+
+	if length > 0 && res[length-1] != '\n' {
+		buf.WriteByte('\n')
+		res = buf.Bytes()
+	}
+
+	syscall.Write(stdoutFd, res)
 }
 
 func Ok(seq int) {
-	Putline("%d OK\n", seq)
+	var buf [64]byte
+	b := strconv.AppendInt(buf[:0], int64(seq), 10)
+	b = append(b, " OK\n"...)
+	syscall.Write(stdoutFd, b)
 }
 
 func OkSeen(seq, qid int) {
-	Putline("* %d [%d]: Already seen by DrWeb\n", seq, qid)
-	Putline("%d OK\n", seq)
+	var buf [128]byte
+	b := buf[:0]
+	b = append(b, "* "...)
+	b = strconv.AppendInt(b, int64(seq), 10)
+	b = append(b, " ["...)
+	b = strconv.AppendInt(b, int64(qid), 10)
+	b = append(b, "]: Already seen by DrWeb\n"...)
+	syscall.Write(stdoutFd, b)
+	Ok(seq)
 }
 
-func Putline(format string, a ...interface{}) {
-	s := fmt.Sprintf(format, a...)
-	syscall.Write(int(os.Stdout.Fd()), []byte(s))
+func Putline(a ...any) {
+	var stackBuf [128]byte
+	res := stackBuf[:0]
+
+	for _, arg := range a {
+		switch v := arg.(type) {
+		case string:
+			res = append(res, v...)
+		case int:
+			res = strconv.AppendInt(res, int64(v), 10)
+		case int64:
+			res = strconv.AppendInt(res, v, 10)
+		case error:
+			if v != nil {
+				res = append(res, v.Error()...)
+			}
+		case []byte:
+			res = append(res, v...)
+		default:
+			res = append(res, fmt.Sprint(v)...)
+		}
+	}
+
+	length := len(res)
+
+	if length > 4096 || (length == 4096 && length > 0 && res[length-1] != '\n') {
+		os.Stderr.WriteString("Putline: result exceeds 4k limit\n")
+		return
+	}
+
+	if length > 0 && res[length-1] != '\n' {
+		res = append(res, '\n')
+	}
+
+	syscall.Write(stdoutFd, res)
 }
 
 func Reject(seq int) {
-	Putline("%d REJECT Try again later\n", seq)
+	var buf [64]byte
+	b := strconv.AppendInt(buf[:0], int64(seq), 10)
+	b = append(b, " REJECT Try again later\n"...)
+	syscall.Write(stdoutFd, b)
 }
 
 func SaveBadFile(seq, qid int, filename string) {
-	err := os.Link(filename, badFiles+"/"+strconv.Itoa(qid)+".msg.debug")
+	path := badFiles + "/" + strconv.Itoa(qid) + ".msg.debug"
+	err := os.Link(filename, path)
 	if err != nil {
-		Putline("* %d [%d]: debug: %s\n", seq, qid, err)
+		Putline("* ", seq, " [", qid, "]: debug: ", err)
 	}
 }
 
-func getHeader(m *bufio.Reader) (string, error) {
-	var b strings.Builder
-	b.Grow(1024)
-
+func getHeader(m *bufio.Reader, buf *bytes.Buffer) error {
+	buf.Reset()
 	for {
 		line, err := m.ReadSlice('\n')
-		if err == nil {
-			// Успешно прочитали порцию до \n
-			b.Write(line)
-		} else if err == bufio.ErrBufferFull {
-			// Строка больше 4КБ. Пишем то, что влезло в буфер, и продолжаем
-			b.Write(line)
-			continue
-		} else {
-			// EOF или критическая ошибка
+		if err != nil {
+			if err == bufio.ErrBufferFull {
+				buf.Write(line)
+				// Защита от бесконечных заголовков
+				if buf.Len() > 64*1024 {
+					return fmt.Errorf("header too long")
+				}
+				continue
+			}
 			if len(line) > 0 {
-				b.Write(line)
+				buf.Write(line)
 			}
 			if err == io.EOF {
 				break
 			}
-			return "", err
+			return err
 		}
+		buf.Write(line)
 
-		// Заглядываем вперед на предмет folding (пробел или таб)
 		next, err := m.Peek(1)
 		if err != nil {
 			break // EOF
 		}
-
 		if next[0] != ' ' && next[0] != '\t' {
-			// Следующая строка — новый заголовок
 			break
 		}
 	}
-
-	return b.String(), nil
+	return nil
 }
 
-func hashReceived(s string) string {
+func hashReceived(b []byte) string {
 	h := sha256.New224()
-	for _, r := range s {
+	for i := 0; i < len(b); {
+		r, size := utf8.DecodeRune(b[i:])
 		if !unicode.IsSpace(r) {
-			if r < utf8.RuneSelf {
-				h.Write([]byte{byte(r)})
-			} else {
-				var buf [utf8.UTFMax]byte
-				n := utf8.EncodeRune(buf[:], r)
-				h.Write(buf[:n])
-			}
+			h.Write(b[i : i+size])
 		}
+		i += size
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
 func isSeen(m *bufio.Reader) (seen bool, err error) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer putBuffer(buf)
+
 	var found bool
-	var hdr string
-	var seenSum string
+	var seenSum []byte
 
 	for {
-		hdr, err = getHeader(m)
+		err = getHeader(m, buf)
 		if err != nil {
 			if err == io.EOF {
-				break
+				err = nil
 			}
 			return
 		}
 
-		if hdr == "\n" || hdr == "\r\n" {
-			// конец заголовка
+		hdr := buf.Bytes()
+
+		if len(hdr) == 0 || (len(hdr) == 1 && hdr[0] == '\n') || (len(hdr) == 2 && hdr[0] == '\r') {
 			break
 		}
 
 		if !found {
-			if val, ok := strings.CutPrefix(hdr, seenHdr); ok {
-				seenSum = strings.TrimSpace(val)
+			if bytes.HasPrefix(hdr, bSeenHdr) {
+				val := bytes.TrimSpace(hdr[len(bSeenHdr):])
+				seenSum = make([]byte, len(val))
+				copy(seenSum, val)
 				found = true
 			}
-		} else if strings.HasPrefix(hdr, recvHdr) {
-			if hashReceived(hdr) == seenSum {
+		} else if bytes.HasPrefix(hdr, bRecvHdr) {
+			if hashReceived(hdr) == string(seenSum) {
 				seen = true
+				break
 			}
-			break
 		}
 	}
 	return
@@ -233,68 +372,63 @@ func makeSeen(filename string) (string, error) {
 	defer h.Close()
 
 	m := bufio.NewReader(h)
-
 	if _, err := skipCGPHeaders(m); err != nil {
 		return "", err
 	}
 
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer putBuffer(buf)
+
 	for {
-		hdr, err := getHeader(m)
-		if err != nil {
+		if err := getHeader(m, buf); err != nil {
 			if err == io.EOF {
 				break
 			}
-			return "", fmt.Errorf("read message header error: %v", err)
+			return "", err
 		}
 
-		if hdr == "\n" || hdr == "\r\n" {
-			// конец заголовка
+		hdr := buf.Bytes()
+		if len(hdr) <= 2 && len(bytes.TrimSpace(hdr)) == 0 {
 			break
 		}
 
-		if strings.HasPrefix(hdr, recvHdr) {
-			return seenHdr + " " + hashReceived(hdr), nil
+		if bytes.HasPrefix(hdr, bRecvHdr) {
+			return string(bSeenHdr) + hashReceived(hdr), nil
 		}
 	}
 
-	return "", fmt.Errorf("no Received header found in message")
+	return "", fmt.Errorf("no Received header found")
 }
 
-func replaceSpecChars(msg string) string {
+func putBuffer(buf *bytes.Buffer) {
+	if buf.Cap() > 4096 {
+		return
+	}
+	buf.Reset()
+	bufferPool.Put(buf)
+}
 
-	var sb strings.Builder
-	sb.Grow(len(msg) + 128)
-
-	for _, symbol := range msg {
-
-		switch symbol {
-		case rune('\\'):
-			// replace \ -> \\   (CGP backslash)
-			sb.WriteString("\\\\")
-
-		case 0x0000:
-			fallthrough
-		case rune('\r'):
+func replaceSpecCharsBuf(buf *bytes.Buffer, s string) {
+	for _, r := range s {
+		switch r {
+		case '\\':
+			buf.WriteString("\\\\")
+		case '\n':
+			buf.WriteString("\\e")
+		case '\t':
+			buf.WriteString("\\t")
+		case '"':
+			buf.WriteString("\\\"")
+		case '\r', 0x00:
 			continue
-
-		case rune('\n'):
-			// replace \n -> \\e (CGP End-of-Line)
-			sb.WriteString("\\e")
-
-		case rune('\t'):
-			// replace \t -> \\t (CGP Tab)
-			sb.WriteString("\\t")
-
-		case rune('"'):
-			// replace \" -> \\" (CGP quote)
-			sb.WriteString("\\\"")
-
 		default:
-			sb.WriteRune(symbol)
+			if r < utf8.RuneSelf {
+				buf.WriteByte(byte(r))
+			} else {
+				buf.WriteRune(r)
+			}
 		}
 	}
-
-	return sb.String()
 }
 
 func skipCGPHeaders(m *bufio.Reader) (int64, error) {

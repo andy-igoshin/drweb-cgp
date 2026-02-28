@@ -2,103 +2,253 @@ package cgp
 
 import (
 	"bufio"
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestSkipCGPHeaders(t *testing.T) {
-	// Имитируем файл CGP: служебные заголовки, пустая строка, письмо
-	raw := "P 123\nS sender@test.com\n\nReturn-Path: <sender@test.com>\n"
-	reader := bufio.NewReader(strings.NewReader(raw))
+// --- Вспомогательные средства тестирования ---
 
-	pos, err := skipCGPHeaders(reader)
+func setupTestFd(t *testing.T) (*os.File, *os.File) {
+	r, w, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("skipCGPHeaders failed: %v", err)
+		t.Fatal(err)
 	}
+	stdoutFd = int(w.Fd())
+	return r, w
+}
 
-	// Ожидаем, что pos укажет на начало "Return-Path"
-	// "P 123\n" (6) + "S sender@test.com\n" (18) + "\n" (1) = 25
-	expectedPos := int64(strings.Index(raw, "Return-Path"))
-	if pos != expectedPos {
-		t.Errorf("expected pos %d, got %d", expectedPos, pos)
+func readOutput(r *os.File) string {
+	var buf [8192]byte // С запасом для длинных выводов
+	n, _ := r.Read(buf[:])
+	return string(buf[:n])
+}
+
+// --- Тесты публичных функций ---
+
+func TestAddHeader(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
+
+	protocol = 4
+	AddHeader(101, []string{"X-Test: True", "X-Admin: Yes"})
+
+	got := readOutput(r)
+	want := "101 ADDHEADER \"X-Test: True\\eX-Admin: Yes\" OK\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestGetHeader_LongAndFolded(t *testing.T) {
-	// Создаем заголовок длиннее 4КБ с фолдингом
-	longVal := strings.Repeat("a", 5000)
-	rawHeader := "X-Long-Header: " + longVal[:100] + "\n " + longVal[100:] + "\nNext-Header: val\n"
-	reader := bufio.NewReader(strings.NewReader(rawHeader))
+func TestAddHeaderLimit(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
 
-	hdr, err := getHeader(reader)
+	// Создаем заголовок, который гарантированно выйдет за 4096 байт
+	bigHeader := strings.Repeat("A", 4100)
+	AddHeader(102, []string{bigHeader})
+
+	got := readOutput(r)
+	if !strings.Contains(got, "FAILURE") {
+		t.Errorf("Expected FAILURE on 4k limit, got %q", got)
+	}
+}
+
+func TestDiscard(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
+
+	Discard(202)
+	got := readOutput(r)
+	if got != "202 DISCARD\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestFailure(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
+
+	// Тест с ошибкой, содержащей \n (проверка логики подчистки)
+	Failure(303, 999, fmt.Errorf("Critical error\n"))
+	got := readOutput(r)
+
+	if strings.Count(got, "\n") != 2 {
+		t.Errorf("Expected exactly 2 lines (log + failure), got %d", strings.Count(got, "\n"))
+	}
+	if !strings.Contains(got, "* 303 [999]: Critical error\n") {
+		t.Errorf("Log line format mismatch: %q", got)
+	}
+}
+
+func TestIntf(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
+
+	Intf(1, "5")
+	if protocol != 5 {
+		t.Errorf("Protocol not updated: got %d", protocol)
+	}
+	got := readOutput(r)
+	if got != "1 INTF 5\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestMessageAndIsSeenIntegration(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "cgp_msg")
+	defer os.RemoveAll(tmpDir)
+
+	qid := 54321
+	fname := filepath.Join(tmpDir, strconv.Itoa(qid)+".msg")
+
+	recvLine := "Received: from remote.host by local.host\n"
+	hash := hashReceived([]byte(recvLine))
+
+	// Контент: CGP заголовки + Сообщение
+	content := "P 100 <test@test.com>\n\n" +
+		"X-DrWeb-Seen: " + hash + "\n" +
+		recvLine + "\n" +
+		"Body of message"
+
+	os.WriteFile(fname, []byte(content), 0644)
+
+	gotQid, h, seen, err := Message(fname)
 	if err != nil {
-		t.Fatalf("getHeader failed on long header: %v", err)
+		t.Fatal(err)
+	}
+	defer h.Close()
+
+	if gotQid != qid || !seen {
+		t.Errorf("Message parse failed: qid=%d, seen=%v", gotQid, seen)
+	}
+}
+
+func TestMirrorTo(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
+
+	tmpDir, _ := os.MkdirTemp("", "cgp_mirror")
+	defer os.RemoveAll(tmpDir)
+
+	fname := filepath.Join(tmpDir, "1.msg")
+	// Имитируем:
+	// 1. Заголовок CGP (P ...)
+	// 2. Пустая строка (разделитель)
+	// 3. Заголовок письма (Received)
+	content := "P 123 <addr>\n\nReceived: from test\n\n"
+	os.WriteFile(fname, []byte(content), 0644)
+
+	protocol = 4
+	MirrorTo(505, 1, fname, []string{"user@remote.com"})
+
+	got := readOutput(r)
+	if !strings.Contains(got, "ADDHEADER") || !strings.Contains(got, "MIRRORTO") || !strings.Contains(got, "DISCARD") {
+		t.Errorf("MirrorTo output mismatch: %q", got)
+	}
+}
+
+func TestOk(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
+
+	Ok(606)
+	if readOutput(r) != "606 OK\n" {
+		t.Error("Ok output mismatch")
+	}
+}
+
+func TestPutline(t *testing.T) {
+	r, w := setupTestFd(t)
+	defer r.Close()
+	defer w.Close()
+
+	Putline("Tag: ", "Info", " Code: ", 200)
+	got := readOutput(r)
+	if got != "Tag: Info Code: 200\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestSaveBadFile(t *testing.T) {
+	os.Mkdir(badFiles, 0755)
+	defer os.RemoveAll(badFiles)
+
+	src := "source.tmp"
+	os.WriteFile(src, []byte("data"), 0644)
+	defer os.Remove(src)
+
+	SaveBadFile(1, 777, src)
+	dst := filepath.Join(badFiles, "777.msg.debug")
+	if _, err := os.Stat(dst); os.IsNotExist(err) {
+		t.Error("Debug file not linked")
+	}
+}
+
+// --- Тесты приватных функций и механизмов ---
+
+func TestGetHeaderFolding(t *testing.T) {
+	data := "Subject: Long\n  folded subject\nNext: Header\n"
+	r := bufio.NewReader(strings.NewReader(data))
+	buf := new(bytes.Buffer)
+
+	err := getHeader(r, buf)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	if !strings.HasPrefix(hdr, "X-Long-Header:") {
-		t.Error("Header name mismatch")
-	}
-
-	// Проверяем, что заголовок считан полностью (длина должна быть > 5000)
-	if len(hdr) < 5000 {
-		t.Errorf("Header too short, probably truncated: %d", len(hdr))
-	}
-
-	// Проверяем, что следующий вызов даст следующий заголовок
-	next, _ := getHeader(reader)
-	if !strings.HasPrefix(next, "Next-Header") {
-		t.Errorf("Expected Next-Header, got: %s", next)
+	res := buf.String()
+	if !strings.Contains(res, "folded subject") {
+		t.Errorf("Folding not handled: %q", res)
 	}
 }
 
 func TestHashReceived(t *testing.T) {
-	// Проверяем, что разные варианты фолдинга дают один хеш
-	h1 := "Received: from test.com\n by mx.test.com\n with ESMTP"
-	h2 := "Received:from test.com by mx.test.com with ESMTP" // без пробелов и переносов
-
-	hash1 := hashReceived(h1)
-	hash2 := hashReceived(h2)
-
-	if hash1 != hash2 {
-		t.Errorf("Hashes don't match!\n1: %s\n2: %s", hash1, hash2)
+	h1 := hashReceived([]byte("Received: from a by b\n"))
+	h2 := hashReceived([]byte("Received: from  a  by  b\r\n"))
+	if h1 != h2 {
+		t.Error("Hash should ignore whitespace differences")
 	}
 }
 
-func TestIsSeen_BoundaryConditions(t *testing.T) {
-	headerToHash := "Received: from a\n"
-	hash := hashReceived(headerToHash)
+func TestPutBufferHygiene(t *testing.T) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	// Искусственно раздуваем буфер
+	buf.Write(make([]byte, 5000))
+	putBuffer(buf)
 
-	// В CGP ваш заголовок будет ВЫШЕ того, который вы хешировали
-	content := "X-DrWeb-Seen: " + hash + "\n" +
-		headerToHash +
-		"\r\n" +
-		"Body starts here"
-
-	reader := bufio.NewReader(strings.NewReader(content))
-	seen, err := isSeen(reader)
-	if err != nil {
-		t.Fatalf("isSeen error: %v", err)
-	}
-	if !seen {
-		t.Error("Expected seen=true, but got false. Check headers order.")
+	// Берем новый
+	newBuf := bufferPool.Get().(*bytes.Buffer)
+	if newBuf.Cap() > 4096 {
+		t.Errorf("Pool hygiene failed: buffer with cap %d returned", newBuf.Cap())
 	}
 }
 
-func BenchmarkIsSeen(b *testing.B) {
-	// Имитируем типичное письмо с длинным Received и нашим маркером
-	longReceived := "Received: from mxfront15j.mail.yandex.net (mxfront15j.mail.yandex.net [1.2.3.4])\n" +
-		" by mx.yourserver.com (CommuniGate Pro SMTP 6.3.1)\n" +
-		" with ESMTPS id 1234567 for user@example.com;\n" +
-		" Tue, 24 Feb 2026 10:00:00 +0300\n"
+func TestReplaceSpecCharsBuf(t *testing.T) {
+	buf := new(bytes.Buffer)
+	replaceSpecCharsBuf(buf, "a\\b\"c\n\t")
+	want := "a\\\\b\\\"c\\e\\t"
+	if buf.String() != want {
+		t.Errorf("got %q, want %q", buf.String(), want)
+	}
+}
 
-	hash := hashReceived(longReceived)
-	content := "X-DrWeb-Seen: " + hash + "\n" + longReceived + "\r\nBody"
-
-	b.ResetTimer()
-	b.ReportAllocs() // Включает отчет об аллокациях
-
-	for i := 0; i < b.N; i++ {
-		reader := bufio.NewReader(strings.NewReader(content))
-		_, _ = isSeen(reader)
+func TestSkipCGPHeadersEdge(t *testing.T) {
+	// Кейс: файл обрывается до пустой строки
+	r := bufio.NewReader(strings.NewReader("P 1\nS 2"))
+	_, err := skipCGPHeaders(r)
+	if err == nil {
+		t.Error("Expected error on unexpected EOF")
 	}
 }

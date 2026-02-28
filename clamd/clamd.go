@@ -1,16 +1,15 @@
 package clamd
 
 import (
-	"encoding/binary"
-	"io"
+	"bufio"
 	"net"
-	"net/textproto"
 	"os"
-	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"git.vsu.ru/ai/drweb-cgp/config"
+	"git.vsu.ru/ai/drweb-cgp/utils"
 )
 
 type Status int
@@ -26,197 +25,82 @@ type Response struct {
 	Filename  string
 	Signature string
 	Status    Status
-	Raw       string
+	raw       []byte
 }
 
 const (
 	chunkSize   = 1024
 	connTimeout = 5 * time.Second
+	bufSize     = 4096
 )
 
-var dialer *net.Dialer
+var (
+	respOK    = "OK"
+	respFOUND = "FOUND"
+	respERROR = "ERROR"
 
-func init() {
-	dialer = &net.Dialer{
-		Timeout: connTimeout,
+	cmdINSTREAM = []byte("nINSTREAM\n")
+	cmdFILDES   = []byte("nFILDES\n")
+	termStream  = []byte{0, 0, 0, 0}
+
+	dialer = &net.Dialer{Timeout: connTimeout}
+
+	readerPool = sync.Pool{
+		New: func() any { return bufio.NewReaderSize(nil, bufSize) },
 	}
-}
+	writerPool = sync.Pool{
+		New: func() any { return bufio.NewWriterSize(nil, bufSize) },
+	}
+)
 
-func Fildes(h *os.File) (r []Response, err error) {
-
-	var conn net.Conn
-
-	conn, err = dialer.Dial(config.Transport(), config.Host())
+func Fildes(h *os.File) ([]Response, error) {
+	conn, err := dialer.Dial(config.Proto(), config.Host())
 	if err != nil {
-		return
+		return nil, err
 	}
-
-	tc := textproto.NewConn(conn)
-	defer tc.Close()
-
-	id := tc.Next()
-	tc.StartRequest(id)
+	defer conn.Close()
 
 	conn.SetDeadline(time.Now().Add(config.Timeout()))
 
-	err = fildesScan(tc, conn, h)
+	raw, err := conn.(*net.UnixConn).SyscallConn()
 	if err != nil {
-		tc.EndRequest(id)
-		return
+		return nil, err
 	}
-
-	tc.W.Flush()
-	tc.EndRequest(id)
-
-	tc.StartResponse(id)
-	defer tc.EndResponse(id)
-
-	r, err = processResponse(tc)
-
-	return
-}
-
-func InStream(h *os.File) (r []Response, err error) {
-
-	var conn net.Conn
-
-	conn, err = dialer.Dial(config.Transport(), config.Host())
-	if err != nil {
-		return
-	}
-
-	tc := textproto.NewConn(conn)
-	defer tc.Close()
-
-	id := tc.Next()
-	tc.StartRequest(id)
-
-	conn.SetDeadline(time.Now().Add(config.Timeout()))
-
-	err = streamScan(tc, h)
-	if err != nil {
-		tc.EndRequest(id)
-		return
-	}
-
-	tc.W.Flush()
-	tc.EndRequest(id)
-
-	tc.StartResponse(id)
-	defer tc.EndResponse(id)
-
-	r, err = processResponse(tc)
-
-	return
-}
-
-func fildesScan(tc *textproto.Conn, conn net.Conn, h *os.File) error {
-
-	if _, err := tc.W.Write([]byte("nFILDES\n")); err != nil {
-		return err
-	}
-	tc.W.Flush()
-
-	rc, err := conn.(*net.UnixConn).SyscallConn()
-	if err != nil {
-		return err
-	}
-
-	rights := syscall.UnixRights(int(h.Fd()))
 
 	var sendErr error
-	err = rc.Control(func(fd uintptr) {
+	rights := syscall.UnixRights(int(h.Fd()))
+
+	err = raw.Control(func(fd uintptr) {
+		sendErr = syscall.Sendmsg(int(fd), cmdFILDES, nil, nil, 0)
+		if sendErr != nil { return }
 		sendErr = syscall.Sendmsg(int(fd), nil, rights, nil, 0)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return sendErr
-}
-
-func processResponse(tc *textproto.Conn) (r []Response, err error) {
-
-	var line []byte
-
-	for {
-		res := Response{}
-
-		if line, err = tc.R.ReadSlice('\n'); err != nil {
-			if err == io.EOF {
-				err = nil
-			}
-			break
-		}
-
-		res.Raw = strings.TrimRight(string(line), "\n")
-		rs := strings.Split(res.Raw, " ")
-
-		switch rs[len(rs)-1] {
-		case "OK":
-			res.Filename = rs[0]
-			res.Status = Ok
-
-		case "FOUND":
-			res.Filename = rs[0]
-			res.Signature = rs[1]
-			res.Status = Found
-
-		case "ERROR":
-			res.Filename = rs[0]
-			res.Status = Error
-
-		default:
-			res.Status = Unknown
-		}
-
-		r = append(r, res)
+	if sendErr != nil {
+		return nil, sendErr
 	}
 
-	return
+	return processResponse(conn)
 }
 
-func streamScan(tc *textproto.Conn, h *os.File) (err error) {
-
-	var n int
-	var eof bool
-
-	_, err = tc.W.Write([]byte("nINSTREAM\n"))
+func InStream(h *os.File) ([]Response, error) {
+	conn, err := dialer.Dial(config.Proto(), config.Host())
 	if err != nil {
-		return
+		return nil, err
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(config.Timeout()))
+
+	if err := streamScan(conn, h); err != nil {
+		return nil, err
 	}
 
-	b := make([]byte, 4)
+	return processResponse(conn)
+}
 
-	for !eof {
-
-		buf := make([]byte, chunkSize)
-
-		if n, err = h.Read(buf); err != nil {
-			if err != io.EOF {
-				return
-			}
-
-			err = nil
-			eof = true
-		}
-
-		if n > 0 {
-			binary.BigEndian.PutUint32(b, uint32(n))
-			if _, err = tc.W.Write(b); err != nil {
-				return
-			}
-
-			if _, err = tc.W.Write(buf[0:n]); err != nil {
-				return
-			}
-			tc.W.Flush()
-		}
-	}
-
-	if _, err = tc.W.Write([]byte{0, 0, 0, 0}); err != nil {
-		return
-	}
-	tc.W.Flush()
-
-	return
+func (r *Response) Raw() string {
+	return utils.Bytes2string(r.raw)
 }
