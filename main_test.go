@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-//	"git.vsu.ru/ai/drweb-cgp/config"
 )
 
 // startMockDrWeb имитирует сервер DrWeb/ClamAV
@@ -57,6 +55,13 @@ func startMockDrWeb(t *testing.T, network string) (string, func()) {
 					if strings.Contains(line, "VERSION") {
 						conn.Write([]byte("EMULATOR: OK\n"))
 					} else if strings.Contains(line, "FILDES") {
+						if uconn, ok := conn.(*net.UnixConn); ok {
+							oob := make([]byte, 32)
+							_, oobn, _, _, err := uconn.ReadMsgUnix(nil, oob)
+							if err != nil || oobn == 0 {
+								return
+							}
+						}
 						conn.Write([]byte("fildes: OK\n"))
 						return
 					} else if strings.Contains(line, "INSTREAM") {
@@ -219,7 +224,10 @@ func BenchmarkHelper_20KB_Unix(b *testing.B) {
 		scanner := bufio.NewScanner(outR)
 		for scanner.Scan() {
 			if strings.Contains(scanner.Text(), "OK") {
-				select { case respChan <- struct{}{}: default: }
+				select {
+				case respChan <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}()
