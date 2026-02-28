@@ -143,7 +143,9 @@ func runIntegrationTest(t *testing.T, useUnix bool) {
 
 	defer func() {
 		syscall.Dup2(oldStdin, 0)
+		syscall.Close(oldStdin)
 		syscall.Dup2(oldStdout, 1)
+		syscall.Close(oldStdout)
 	}()
 
 	go main()
@@ -212,7 +214,9 @@ func BenchmarkHelper_20KB_Unix(b *testing.B) {
 
 	defer func() {
 		syscall.Dup2(oldStdin, 0)
+		syscall.Close(oldStdin)
 		syscall.Dup2(oldStdout, 1)
+		syscall.Close(oldStdout)
 	}()
 
 	// 4. Запускаем хелпер
@@ -263,7 +267,9 @@ func BenchmarkHelper_20KB_TCP(b *testing.B) {
 	outW.Close()
 	defer func() {
 		syscall.Dup2(oldStdin, 0)
+		syscall.Close(oldStdin)
 		syscall.Dup2(oldStdout, 1)
+		syscall.Close(oldStdout)
 	}()
 
 	go main()
