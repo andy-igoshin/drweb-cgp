@@ -30,7 +30,8 @@ case "$1" in
         go test -bench=. -benchmem -run=^#
         ;;
     "pprof")
-        go test -cpu=1 -bench=BenchmarkHelper_20KB_Unix -benchmem -cpuprofile cpu.out -memprofile mem.out
+        #go test -cpu=1 -bench=BenchmarkHelper_20KB_Unix -benchmem -cpuprofile cpu.out -memprofile mem.out
+        go test -cpu=1 -bench=BenchmarkHelper_20KB_TCP -benchmem -cpuprofile cpu.out -memprofile mem.out
         ;;
     "tidy")
         go mod tidy
