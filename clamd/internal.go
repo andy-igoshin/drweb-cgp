@@ -11,6 +11,20 @@ import (
 	"git.vsu.ru/ai/drweb-cgp/utils"
 )
 
+const (
+	chunkSize = 1024
+
+	respOK    = "OK"
+	respFOUND = "FOUND"
+	respERROR = "ERROR"
+)
+
+var (
+	cmdINSTREAM = []byte("nINSTREAM\n")
+	cmdFILDES   = []byte("nFILDES\n")
+	termStream  = []byte{0, 0, 0, 0}
+)
+
 func processResponse(conn net.Conn) (r []Response, err error) {
 	br := readerPool.Get().(*bufio.Reader)
 	br.Reset(conn)

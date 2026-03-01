@@ -29,20 +29,11 @@ type Response struct {
 }
 
 const (
-	chunkSize   = 1024
 	connTimeout = 5 * time.Second
 	bufSize     = 4096
 )
 
 var (
-	respOK    = "OK"
-	respFOUND = "FOUND"
-	respERROR = "ERROR"
-
-	cmdINSTREAM = []byte("nINSTREAM\n")
-	cmdFILDES   = []byte("nFILDES\n")
-	termStream  = []byte{0, 0, 0, 0}
-
 	dialer = &net.Dialer{Timeout: connTimeout}
 
 	readerPool = sync.Pool{
