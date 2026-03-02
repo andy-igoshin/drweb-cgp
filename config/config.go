@@ -45,7 +45,7 @@ func Host() string {
 }
 
 func GetVersion() string {
-	return fmt.Sprintf("drweb-cgp helper\n  Version:  %s\n  Commit:   %s\n  Built:    %s\n",
+	return fmt.Sprintf("drweb-cgp\n  version:  %s\n  commit:   %s\n  built:    %s\n",
 		Version, Commit, BuildTime)
 }
 
