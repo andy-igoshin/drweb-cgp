@@ -60,7 +60,7 @@ func New(args []string) (*Config, error) {
 	fs.StringVar(&c.host, "host", "/run/.com.drweb.clamd", "DrWeb host to connect")
 	fs.StringVar(&mirrorTo, "mirror-to", "", "Mirror selected messages to email")
 	fs.DurationVar(&c.timeout, "timeout", 180*time.Second, "DrWeb request timeout")
-	fs.BoolVar(&c.version, "version", false, "print version and exit")
+	fs.BoolVar(&c.version, "version", false, "Print version and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
