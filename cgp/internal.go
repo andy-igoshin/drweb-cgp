@@ -3,13 +3,13 @@ package cgp
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"unicode"
+	"strconv"
 	"unicode/utf8"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 func getHeader(m *bufio.Reader, buf *bytes.Buffer) error {
@@ -47,15 +47,26 @@ func getHeader(m *bufio.Reader, buf *bytes.Buffer) error {
 }
 
 func hashReceived(b []byte) string {
-	h := sha256.New224()
-	for i := 0; i < len(b); {
-		r, size := utf8.DecodeRune(b[i:])
-		if !unicode.IsSpace(r) {
-			h.Write(b[i : i+size])
+	h := xxhash.New()
+
+	start := 0
+	for i := 0; i < len(b); i++ {
+		// Нормализация: игнорируем пробелы, табы и переносы строк (folding)
+		if b[i] <= 32 {
+			if i > start {
+				h.Write(b[start:i])
+			}
+			start = i + 1
 		}
-		i += size
 	}
-	return hex.EncodeToString(h.Sum(nil))
+
+	// Дописываем остаток, если он есть
+	if start < len(b) {
+		h.Write(b[start:])
+	}
+
+	// Результат — 64-битное число, приводим к hex (16 символов)
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 func isSeen(m *bufio.Reader) (seen bool, err error) {
