@@ -25,11 +25,12 @@ var (
 )
 
 var dataPool = sync.Pool{
-    New: func() any {
-        b := make([]byte, bufSize)
-        return &b
-    },
+	New: func() any {
+		b := make([]byte, bufSize)
+		return &b
+	},
 }
+
 func processResponse(conn net.Conn) (r []Response, err error) {
 	rd := readerPool.Get().(*bufio.Reader)
 	rd.Reset(conn)
