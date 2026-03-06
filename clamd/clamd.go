@@ -2,6 +2,7 @@ package clamd
 
 import (
 	"bufio"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -53,7 +54,11 @@ func Fildes(h *os.File) ([]Response, error) {
 
 	conn.SetDeadline(time.Now().Add(config.Timeout()))
 
-	raw, err := conn.(*net.UnixConn).SyscallConn()
+	unixConn, ok := conn.(*net.UnixConn)
+	if !ok {
+		return nil, fmt.Errorf("FILDES requires unix socket, got %s", config.Proto())
+	}
+	raw, err := unixConn.SyscallConn()
 	if err != nil {
 		return nil, err
 	}
