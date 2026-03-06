@@ -30,14 +30,13 @@ var dataPool = sync.Pool{
         return &b
     },
 }
-
 func processResponse(conn net.Conn) (r []Response, err error) {
-	br := readerPool.Get().(*bufio.Reader)
-	br.Reset(conn)
-	defer putReader(br)
+	rd := readerPool.Get().(*bufio.Reader)
+	rd.Reset(conn)
+	defer putReader(rd)
 
 	for {
-		line, err := br.ReadSlice('\n')
+		line, err := rd.ReadSlice('\n')
 		if err != nil {
 			if err == io.EOF {
 				return r, nil
@@ -53,29 +52,27 @@ func processResponse(conn net.Conn) (r []Response, err error) {
 		raw := make([]byte, len(line))
 		copy(raw, line)
 		res := Response{raw: raw}
-		rs := bytes.Fields(res.raw)
-		lastIdx := len(rs) - 1
 
-		if lastIdx < 0 {
+		lastSpace := bytes.LastIndexByte(raw, ' ')
+		if lastSpace == -1 {
+			res.Status = Unknown
+			r = append(r, res)
 			continue
 		}
 
-		switch utils.Bytes2string(rs[lastIdx]) {
+		status := utils.Bytes2string(raw[lastSpace+1:])
+
+		switch status {
 		case respOK:
-			res.Filename = utils.Bytes2string(rs[0])
 			res.Status = Ok
-
-		case respFOUND:
-			res.Filename = utils.Bytes2string(rs[0])
-			if len(rs) > 1 {
-				res.Signature = utils.Bytes2string(rs[1])
-			}
-			res.Status = Found
-
 		case respERROR:
-			res.Filename = utils.Bytes2string(rs[0])
 			res.Status = Error
-
+		case respFOUND:
+			res.Status = Found
+			head := raw[:lastSpace]
+			if i := bytes.LastIndexByte(head, ' '); i != -1 {
+				res.Signature = utils.Bytes2string(head[i+1:])
+			}
 		default:
 			res.Status = Unknown
 		}

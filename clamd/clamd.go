@@ -23,7 +23,6 @@ const (
 )
 
 type Response struct {
-	Filename  string
 	Signature string
 	Status    Status
 	raw       []byte

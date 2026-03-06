@@ -20,35 +20,30 @@ func TestProcessResponse_OriginalLogic(t *testing.T) {
 			name:      "DrWeb Fildes OK",
 			input:     "fd[13]: OK\n",
 			expected:  Ok,
-			filename:  "fd[13]:",
 			signature: "",
 		},
 		{
 			name:      "DrWeb Fildes Virus",
 			input:     "fd[13]: JS.Muldrop.1159 FOUND\n",
 			expected:  Found,
-			filename:  "fd[13]:",
 			signature: "JS.Muldrop.1159",
 		},
 		{
 			name:      "Standard Path OK",
 			input:     "/tmp/test.eml: OK\n",
 			expected:  Ok,
-			filename:  "/tmp/test.eml:",
 			signature: "",
 		},
 		{
 			name:      "Standard Path Virus",
 			input:     "/tmp/virus.eml: Eicar-Test FOUND\n",
 			expected:  Found,
-			filename:  "/tmp/virus.eml:",
 			signature: "Eicar-Test",
 		},
 		{
 			name:      "Error Response",
 			input:     "file.eml: some_error ERROR\n",
 			expected:  Error,
-			filename:  "file.eml:",
 			signature: "",
 		},
 	}
@@ -74,9 +69,6 @@ func TestProcessResponse_OriginalLogic(t *testing.T) {
 			r := res[0]
 			if r.Status != tt.expected {
 				t.Errorf("status mismatch: got %v, want %v", r.Status, tt.expected)
-			}
-			if r.Filename != tt.filename {
-				t.Errorf("filename mismatch: got %q, want %q", r.Filename, tt.filename)
 			}
 			if tt.expected == Found && r.Signature != tt.signature {
 				t.Errorf("signature mismatch: got %q, want %q", r.Signature, tt.signature)
