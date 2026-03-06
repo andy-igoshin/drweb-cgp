@@ -7,13 +7,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 
 	"git.vsu.ru/ai/drweb-cgp/utils"
 )
 
 const (
-	chunkSize = 1024
-
 	respOK    = "OK"
 	respFOUND = "FOUND"
 	respERROR = "ERROR"
@@ -24,6 +23,13 @@ var (
 	cmdFILDES   = []byte("nFILDES\n")
 	termStream  = []byte{0, 0, 0, 0}
 )
+
+var dataPool = sync.Pool{
+    New: func() any {
+        b := make([]byte, bufSize)
+        return &b
+    },
+}
 
 func processResponse(conn net.Conn) (r []Response, err error) {
 	br := readerPool.Get().(*bufio.Reader)
@@ -88,33 +94,42 @@ func putWriter(bw *bufio.Writer) {
 	writerPool.Put(bw)
 }
 
-func streamScan(conn net.Conn, h *os.File) error {
+func streamScan(conn net.Conn, h *os.File) (err error) {
 	w := writerPool.Get().(*bufio.Writer)
 	w.Reset(conn)
 	defer putWriter(w)
 
-	if _, err := w.Write(cmdINSTREAM); err != nil {
-		return err
+	bufPtr := dataPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer dataPool.Put(bufPtr)
+
+	if _, err = w.Write(cmdINSTREAM); err != nil {
+		return
 	}
 
-	var buf [chunkSize]byte
-	var hdr [4]byte
-
 	for {
-		n, err := h.Read(buf[:])
+		// Читаем 4092 байта, оставляя 4 под header
+		var n int
+		n, err = h.Read(buf[4:])
 		if n > 0 {
-			binary.BigEndian.PutUint32(hdr[:], uint32(n))
-			w.Write(hdr[:])
-			w.Write(buf[:n])
+			binary.BigEndian.PutUint32(buf[:4], uint32(n))
+			// Весь блок (4+n) уходит в bufio. При n=4092 это 4096.
+			if _, err = w.Write(buf[:4+n]); err != nil {
+				return
+			}
 		}
 		if err != nil {
 			if err == io.EOF {
+				err = nil
 				break
 			}
-			return err
+			return
 		}
 	}
 
-	w.Write(termStream)
+	if _, err = w.Write(termStream); err != nil {
+		return
+	}
+
 	return w.Flush()
 }

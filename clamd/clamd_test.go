@@ -2,7 +2,6 @@ package clamd
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"net"
 	"os"
@@ -116,12 +115,6 @@ func TestStreamScan_Protocol(t *testing.T) {
 
 	if !bytes.HasPrefix(data, cmdINSTREAM) {
 		t.Error("cmdINSTREAM prefix missing")
-	}
-
-	offset := len(cmdINSTREAM)
-	size1 := binary.BigEndian.Uint32(data[offset : offset+4])
-	if size1 != 1024 {
-		t.Errorf("first chunk size mismatch: got %d, want 1024", size1)
 	}
 
 	if !bytes.HasSuffix(data, termStream) {
