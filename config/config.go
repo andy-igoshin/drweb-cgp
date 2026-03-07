@@ -23,12 +23,12 @@ const (
 )
 
 type Config struct {
-	debug         bool
-	host          string
-	mirrorTo      []string
-	transport     TrType
-	timeout       time.Duration
-	version       bool
+	debug     bool
+	host      string
+	mirrorTo  []string
+	transport TrType
+	timeout   time.Duration
+	version   bool
 }
 
 const port = ":3310"
