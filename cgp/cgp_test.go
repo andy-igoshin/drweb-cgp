@@ -87,21 +87,6 @@ func TestFailure(t *testing.T) {
 	}
 }
 
-func TestIntf(t *testing.T) {
-	r, w := setupTestFd(t)
-	defer r.Close()
-	defer w.Close()
-
-	Intf(1, "5")
-	if protocol != 5 {
-		t.Errorf("Protocol not updated: got %d", protocol)
-	}
-	got := readOutput(r)
-	if got != "1 INTF 5\n" {
-		t.Errorf("got %q", got)
-	}
-}
-
 func TestMessageAndIsSeenIntegration(t *testing.T) {
 	tmpDir, _ := os.MkdirTemp("", "cgp_msg")
 	defer os.RemoveAll(tmpDir)
@@ -120,14 +105,14 @@ func TestMessageAndIsSeenIntegration(t *testing.T) {
 
 	os.WriteFile(fname, []byte(content), 0644)
 
-	gotQid, h, seen, err := Message(fname)
+	msg, err := NewMessage(2, fname)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer h.Close()
+	defer msg.Close()
 
-	if gotQid != qid || !seen {
-		t.Errorf("Message parse failed: qid=%d, seen=%v", gotQid, seen)
+	if msg.QID != qid || !msg.IsSeen() {
+		t.Errorf("Message parse failed: qid=%d, seen=%v", msg.QID, msg.IsSeen())
 	}
 }
 
@@ -142,18 +127,31 @@ func TestMirrorTo_Integrated(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	t.Run("Success_Mirroring", func(t *testing.T) {
-		fname := filepath.Join(tmpDir, "success.msg")
+		fname := filepath.Join(tmpDir, "505.msg")
 		content := "P 123 <addr>\n\nReceived: from relay1\n\nBody"
 		os.WriteFile(fname, []byte(content), 0644)
 
-		protocol = 4
-		MirrorTo(505, 1, fname, []string{"user@remote.com"})
+		msg, err := NewMessage(505, fname)
+		if err != nil {
+			t.Errorf("NewMessage error: %v", err)
+		}
+
+		var headers []string
+		to := []string{"user@remote.com"}
+		if seenHdr := msg.MakeSeen(); seenHdr != "" {
+			headers = append(headers, seenHdr)
+		} else {
+			t.Errorf("warning: MirrorTo skipped (no Seen tag)")
+			to = nil
+		}
+
+		MirrorTo(505, msg, to, headers)
 
 		got := readOutput(r)
 		if strings.Count(got, "\n") != 1 {
 			t.Errorf("Expected exactly one newline for atomic response, got %d", strings.Count(got, "\n"))
 		}
-		if !strings.Contains(got, "ADDHEADER") || !strings.Contains(got, "MIRRORTO") || !strings.Contains(got, "DISCARD") {
+		if !strings.Contains(got, "MIRRORTO") || !strings.Contains(got, "DISCARD") {
 			t.Errorf("Chain missing components: %q", got)
 		}
 		if !strings.Contains(got, "X-DrWeb-Seen:") {
@@ -162,31 +160,31 @@ func TestMirrorTo_Integrated(t *testing.T) {
 	})
 
 	t.Run("No_Received_Header", func(t *testing.T) {
-		fname := filepath.Join(tmpDir, "no_received.msg")
+		fname := filepath.Join(tmpDir, "506.msg")
 		// Файл без Received — makeSeen должен споткнуться
 		content := "P 124 <addr>\n\nSubject: No Received\n\nBody"
 		os.WriteFile(fname, []byte(content), 0644)
 
-		MirrorTo(506, 2, fname, []string{"user@remote.com"})
+		msg, err := NewMessage(506, fname)
+		if err != nil {
+			t.Errorf("NewMessage error: %v", err)
+		}
+
+		var headers []string
+		to := []string{"user@remote.com"}
+		if seenHdr := msg.MakeSeen(); seenHdr != "" {
+			headers = append(headers, seenHdr)
+		} else {
+			t.Log("warning: MirrorTo skipped (no Seen tag)")
+			to = nil
+		}
+
+		MirrorTo(506, msg, to, headers)
 
 		got := readOutput(r)
 		// Ожидаем вызов Failure (две строки: * seq [qid]... и seq FAILURE)
-		if !strings.Contains(got, "FAILURE") {
-			t.Errorf("Expected FAILURE due to missing Received header, got: %q", got)
-		}
-	})
-
-	t.Run("Old_Protocol_Fallback", func(t *testing.T) {
-		fname := filepath.Join(tmpDir, "fallback.msg")
-		os.WriteFile(fname, []byte("..."), 0644)
-
-		protocol = 3 // Протокол < 4
-		MirrorTo(507, 3, fname, []string{"user@remote.com"})
-
-		got := readOutput(r)
-		// Для старых версий или пустого 'to' должен быть простой DISCARD
-		if !strings.Contains(got, "507 DISCARD") {
-			t.Errorf("Expected simple DISCARD for protocol < 4, got: %q", got)
+		if !strings.Contains(got, "DISCARD") {
+			t.Errorf("Expected DISCARD due to missing Received header, got: %q", got)
 		}
 	})
 }

@@ -9,18 +9,19 @@ import (
 )
 
 func Scan(seq int, filename string) {
-	qid, h, seen, err := cgp.Message(filename)
+
+	msg, err := cgp.NewMessage(seq, filename)
 	if err != nil {
 		if config.Debug() {
-			cgp.SaveBadFile(seq, qid, filename)
+			cgp.SaveBadFile(seq, msg.QID, filename)
 		}
-		cgp.Failure(seq, qid, err)
+		cgp.Failure(seq, 0, err)
 		return
 	}
-	defer h.Close()
+	defer msg.Close()
 
-	if seen {
-		cgp.OkSeen(seq, qid)
+	if msg.IsSeen() {
+		cgp.OkSeen(seq, msg.QID)
 		return
 	}
 
@@ -28,20 +29,20 @@ func Scan(seq int, filename string) {
 
 	switch config.Transport() {
 	case config.TrUnix:
-		r, err = clamd.Fildes(h)
+		r, err = clamd.Fildes(msg.File)
 	case config.TrTcp:
-		r, err = clamd.InStream(h)
+		r, err = clamd.InStream(msg.File)
 	default:
 		err = fmt.Errorf("unknown transport")
 	}
 
 	if err != nil {
-		handleError(seq, qid, filename, err)
+		handleError(seq, msg.QID, filename, err)
 		return
 	}
 
 	if len(r) == 0 {
-		handleError(seq, qid, filename, fmt.Errorf("incorrect response"))
+		handleError(seq, msg.QID, filename, fmt.Errorf("incorrect response"))
 		return
 	}
 
@@ -51,18 +52,27 @@ func Scan(seq int, filename string) {
 		cgp.Ok(seq)
 
 	case clamd.Found:
-		cgp.Putline("* ", seq, " [", qid, "]: ", res.Raw())
-		if config.MirrorDiscard() {
-			cgp.MirrorTo(seq, qid, filename, config.MirrorTo())
-		} else {
-			cgp.Discard(seq)
+		cgp.Putline("* ", seq, " [", msg.QID, "]: ", res.Raw())
+
+		var headers []string
+		actualMirror := config.MirrorTo()
+
+		if len(actualMirror) > 0 {
+			if seenHdr := msg.MakeSeen(); seenHdr != "" {
+				headers = append(headers, seenHdr)
+			} else {
+				cgp.Putline("* ", seq, " [", msg.QID, "]: warning: MirrorTo skipped (no Seen tag)")
+				actualMirror = nil
+			}
 		}
 
+		cgp.MirrorTo(seq, msg, actualMirror, headers)
+
 	case clamd.Error:
-		handleError(seq, qid, filename, fmt.Errorf("%s", res.Raw()))
+		handleError(seq, msg.QID, filename, fmt.Errorf("%s", res.Raw()))
 
 	default:
-		handleError(seq, qid, filename, fmt.Errorf("unknown response: %s", res.Raw()))
+		handleError(seq, msg.QID, filename, fmt.Errorf("unknown response: %s", res.Raw()))
 	}
 }
 

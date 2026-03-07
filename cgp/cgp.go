@@ -1,13 +1,10 @@
 package cgp
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 )
@@ -15,10 +12,8 @@ import (
 const badFiles = "BadFiles"
 
 var (
-	protocol int
+	protocol int = 4
 	stdoutFd int
-	bRecvHdr = []byte("Received: ")
-	bSeenHdr = []byte("X-DrWeb-Seen: ")
 )
 
 var bufferPool = sync.Pool{
@@ -39,11 +34,7 @@ func AddHeader(seq int, headers []string) {
 		}
 	}
 
-	if protocol >= 4 {
-		buf.WriteString("\" OK")
-	} else {
-		buf.WriteString("\"")
-	}
+	buf.WriteString("\" OK")
 
 	res := buf.Bytes()
 	length := len(res)
@@ -115,7 +106,6 @@ func InitStdoutFd() error {
 }
 
 func Intf(seq int, ver string) {
-	protocol, _ = strconv.Atoi(ver)
 	var buf [64]byte
 	b := strconv.AppendInt(buf[:0], int64(seq), 10)
 	b = append(b, " INTF "...)
@@ -124,79 +114,39 @@ func Intf(seq int, ver string) {
 	syscall.Write(stdoutFd, b)
 }
 
-func Message(filename string) (qid int, h *os.File, seen bool, err error) {
-
-	start := strings.LastIndexByte(filename, '/') + 1
-	end := strings.LastIndexByte(filename, '.')
-	if end <= start {
-		err = fmt.Errorf("invalid filename: %s", filename)
-		return
-	}
-	qid, err = strconv.Atoi(filename[start:end])
-	if err != nil {
-		return
-	}
-
-	h, err = os.Open(filename)
-	if err != nil {
-		return
-	}
-
-	m := bufio.NewReader(h)
-	var pos int64
-	pos, err = skipCGPHeaders(m)
-	if err != nil {
-		return
-	}
-
-	seen, err = isSeen(m)
-	if err != nil || seen {
-		return
-	}
-
-	_, err = h.Seek(pos, io.SeekStart)
-
-	return
-}
-
-func MirrorTo(seq int, qid int, filename string, to []string) {
-	if protocol < 4 || len(to) == 0 {
-		Discard(seq)
-		return
-	}
-
-	seenhdr, err := makeSeen(filename)
-	if err != nil {
-		Failure(seq, qid, err)
-		return
-	}
-
+func MirrorTo(seq int, m *Message, to []string, headers []string) {
 	buf := bufferPool.Get().(*bytes.Buffer)
 	defer putBuffer(buf)
 
+	// SEQ [ADDHEADER "h1\eh2"] [MIRRORTO "rcpt"] {DISCARD|OK}
 	buf.WriteString(strconv.Itoa(seq))
-	buf.WriteString(" ADDHEADER \"")
 
-	replaceSpecCharsBuf(buf, seenhdr)
-	buf.WriteString("\"")
+	if len(headers) > 0 {
+		buf.WriteString(" ADDHEADER \"")
+		for i, h := range headers {
+			replaceSpecCharsBuf(buf, h)
+			if i < len(headers)-1 {
+				buf.WriteString("\\e")
+			}
+		}
+		buf.WriteString("\"")
+	}
 
-	for _, m := range to {
+	for _, rcpt := range to {
 		buf.WriteString(" MIRRORTO \"")
-		replaceSpecCharsBuf(buf, m)
+		replaceSpecCharsBuf(buf, rcpt)
 		buf.WriteString("\"")
 	}
 
 	buf.WriteString(" DISCARD")
 
 	res := buf.Bytes()
-	length := len(res)
-
-	if length > 4096 || (length == 4096 && res[length-1] != '\n') {
-		Failure(seq, qid, fmt.Errorf("MirrorTo: result exceeds 4k limit"))
+	if len(res) > 4096 {
+		Failure(seq, m.QID, fmt.Errorf("MirrorTo: result exceeds 4k limit (%d bytes)", len(res)))
 		return
 	}
 
-	if length > 0 && res[length-1] != '\n' {
+	if len(res) > 0 && res[len(res)-1] != '\n' {
 		buf.WriteByte('\n')
 		res = buf.Bytes()
 	}
