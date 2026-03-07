@@ -25,7 +25,6 @@ const (
 type Config struct {
 	debug         bool
 	host          string
-	mirrorDiscard bool
 	mirrorTo      []string
 	transport     TrType
 	timeout       time.Duration
@@ -84,16 +83,11 @@ func (c *Config) postProcess(mirrorTo string) error {
 	}
 
 	if len(mirrorTo) > 0 {
-		c.mirrorDiscard = true
 		cleanMirror := strings.ReplaceAll(mirrorTo, " ", "")
 		c.mirrorTo = strings.Split(cleanMirror, ",")
 	}
 
 	return nil
-}
-
-func MirrorDiscard() bool {
-	return configInstance.mirrorDiscard
 }
 
 func MirrorTo() []string {
