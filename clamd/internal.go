@@ -71,8 +71,8 @@ func processResponse(conn net.Conn) (r []Response, err error) {
 		case respFOUND:
 			res.Status = Found
 			head := raw[:lastSpace]
-			if i := bytes.LastIndexByte(head, ' '); i != -1 {
-				res.Signature = utils.Bytes2string(head[i+1:])
+			if i := bytes.IndexByte(head, ':'); i != -1 {
+				res.Signature = utils.Bytes2string(head[i+2:])
 			}
 		default:
 			res.Status = Unknown
