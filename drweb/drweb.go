@@ -68,17 +68,12 @@ func Scan(seq int, filename string) {
 
 		cgp.MirrorTo(seq, msg, actualMirror, headers)
 
+		handleNotifications(seq, msg, res.Signature)
+
 	case clamd.Error:
 		handleError(seq, msg.QID, filename, fmt.Errorf("%s", res.Raw()))
 
 	default:
 		handleError(seq, msg.QID, filename, fmt.Errorf("unknown response: %s", res.Raw()))
 	}
-}
-
-func handleError(seq, qid int, filename string, err error) {
-	if config.Debug() {
-		cgp.SaveBadFile(seq, qid, filename)
-	}
-	cgp.Failure(seq, qid, err)
 }
