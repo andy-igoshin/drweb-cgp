@@ -3,11 +3,13 @@ package config
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// Эти значения будут перезаписаны при сборке через -ldflags
+// Данные заполняются при сборке через -ldflags
 var (
 	Version   = "dev"
 	Commit    = "none"
@@ -23,15 +25,28 @@ const (
 )
 
 type Config struct {
-	debug     bool
-	host      string
-	mirrorTo  []string
-	transport TrType
-	timeout   time.Duration
-	version   bool
-}
+	Host          string        `yaml:"host"`
+	Timeout       time.Duration `yaml:"timeout"`
+	MirrorTo      []string      `yaml:"mirror-to"`
+	Notifications struct {
+		From          string `yaml:"from"`
+		Authenticated bool   `yaml:"authenticated"`
+		External      struct {
+			Enable  bool `yaml:"enable"`
+			Domains struct {
+				Allow []string `yaml:"allow"`
+				Deny  []string `yaml:"deny"`
+			} `yaml:"domains"`
+		} `yaml:"external"`
+	} `yaml:"notifications"`
 
-const port = ":3310"
+	allowMap map[string]struct{}
+	denyMap  map[string]struct{}
+
+	debug       bool
+	transport   TrType
+	showVersion bool
+}
 
 var configInstance *Config
 
@@ -39,59 +54,95 @@ func Debug() bool {
 	return configInstance.debug
 }
 
-func Host() string {
-	return configInstance.host
-}
-
 func GetVersion() string {
 	return fmt.Sprintf("drweb-cgp\n  version:  %s\n  commit:   %s\n  built:    %s\n",
 		Version, Commit, BuildTime)
 }
 
-func New(args []string) (*Config, error) {
-	c := &Config{}
+func Host() string {
+	return configInstance.Host
+}
 
+func IsAuthNotifyEnabled() bool {
+	return configInstance.Notifications.Authenticated
+}
+
+func IsDomainAllowed(domain string) bool {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+
+	if _, denied := configInstance.denyMap[domain]; denied {
+		return false
+	}
+
+	if len(configInstance.allowMap) == 0 {
+		return true
+	}
+
+	_, allowed := configInstance.allowMap[domain]
+	return allowed
+}
+
+func IsExternalNotifyEnabled() bool {
+	return configInstance.Notifications.External.Enable
+}
+
+func MirrorTo() []string {
+	return configInstance.MirrorTo
+}
+
+func New(args []string) (*Config, error) {
 	fs := flag.NewFlagSet("drweb-cgp", flag.ContinueOnError)
 
-	var mirrorTo string
+	var dir string
+	if exePath, err := os.Executable(); err == nil {
+		dir = filepath.Dir(exePath)
+	} else {
+		dir = "."
+	}
 
-	fs.BoolVar(&c.debug, "debug", false, "Export debug information (for developers)")
-	fs.StringVar(&c.host, "host", "/run/.com.drweb.clamd", "DrWeb host to connect")
-	fs.StringVar(&mirrorTo, "mirror-to", "", "Mirror selected messages to email")
-	fs.DurationVar(&c.timeout, "timeout", 180*time.Second, "DrWeb request timeout")
-	fs.BoolVar(&c.version, "version", false, "Print version and exit")
+	var configPath string
+	var configDump bool
+	var configTest bool
+	var debug bool
+	var version bool
+
+	fs.StringVar(&configPath, "config", filepath.Join(dir, "drweb-cgp.yml"), "Path to configuration file")
+	fs.BoolVar(&configDump, "configdump", false, "Dump configuration and exit")
+	fs.BoolVar(&configTest, "configtest", false, "Test configuration syntax and exit")
+	fs.BoolVar(&debug, "debug", false, "Enable debug logging")
+	fs.BoolVar(&version, "version", false, "Print version and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 
-	if err := c.postProcess(mirrorTo); err != nil {
+	if version {
+		return &Config{showVersion: true}, nil
+	}
+
+	c, err := loadFile(configPath)
+	if err != nil {
 		return nil, err
+	}
+
+	c.debug = debug
+	c.showVersion = version
+
+	if configTest {
+		fmt.Println("config: Syntax OK")
+		os.Exit(0)
+	}
+
+	if configDump {
+		dumpConfig(c)
+		os.Exit(0)
 	}
 
 	return c, nil
 }
 
-func (c *Config) postProcess(mirrorTo string) error {
-	if strings.HasPrefix(c.host, "/") {
-		c.transport = TrUnix
-	} else {
-		c.transport = TrTcp
-		if !strings.Contains(c.host, ":") {
-			c.host += port
-		}
-	}
-
-	if len(mirrorTo) > 0 {
-		cleanMirror := strings.ReplaceAll(mirrorTo, " ", "")
-		c.mirrorTo = strings.Split(cleanMirror, ",")
-	}
-
-	return nil
-}
-
-func MirrorTo() []string {
-	return configInstance.mirrorTo
+func NotifyFrom() string {
+	return configInstance.Notifications.From
 }
 
 func Proto() string {
@@ -106,11 +157,11 @@ func SetGlobal(c *Config) {
 }
 
 func ShowVersion() bool {
-	return configInstance.version
+	return configInstance.showVersion
 }
 
 func Timeout() time.Duration {
-	return configInstance.timeout
+	return configInstance.Timeout
 }
 
 func Transport() TrType {
