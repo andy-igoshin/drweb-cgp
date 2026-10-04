@@ -4,9 +4,21 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
+	"strings"
 	"unicode/utf8"
 )
+
+func extractAngle(line []byte) (string, bool) {
+	s := strings.IndexByte(string(line), '<')
+	if s < 0 {
+		return "", false
+	}
+	e := strings.IndexByte(string(line[s:]), '>')
+	if e < 0 {
+		return "", false
+	}
+	return string(line[s+1 : s+e]), true
+}
 
 func getHeader(m *bufio.Reader, buf *bytes.Buffer) error {
 	for {
@@ -70,30 +82,5 @@ func replaceSpecCharsBuf(buf *bytes.Buffer, s string) {
 				buf.WriteRune(r)
 			}
 		}
-	}
-}
-
-func skipCGPHeaders(m *bufio.Reader) (int64, error) {
-	var pos int64
-	for {
-		line, err := m.ReadSlice('\n')
-		pos += int64(len(line))
-
-		if err == nil {
-			if (len(line) == 1 && line[0] == '\n') ||
-				(len(line) == 2 && line[0] == '\r' && line[1] == '\n') {
-				return pos, nil
-			}
-			continue
-		}
-
-		if err == bufio.ErrBufferFull {
-			continue
-		}
-
-		if err == io.EOF {
-			return pos, fmt.Errorf("unexpected end of CGP headers")
-		}
-		return pos, err
 	}
 }

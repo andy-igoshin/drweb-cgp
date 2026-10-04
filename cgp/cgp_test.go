@@ -274,12 +274,3 @@ func TestReplaceSpecCharsBuf(t *testing.T) {
 		t.Errorf("got %q, want %q", buf.String(), want)
 	}
 }
-
-func TestSkipCGPHeadersEdge(t *testing.T) {
-	// Кейс: файл обрывается до пустой строки
-	r := bufio.NewReader(strings.NewReader("P 1\nS 2"))
-	_, err := skipCGPHeaders(r)
-	if err == nil {
-		t.Error("Expected error on unexpected EOF")
-	}
-}
