@@ -16,11 +16,17 @@
 
 * The *Helper* instructs *CommuniGate Pro* to discard a message if a virus is detected.
 
+* The Helper can notify the message sender if a virus is detected. Notifications are sent to either authenticated users or external senders whose *Envelope&nbsp;FROM* domain is verified by a *DKIM* signature (details are available in the configuration file).
+
+> *DKIM* verification is performed only upon virus detection and only if notifications are enabled.
+
 * The *Helper* can forward a copy of the infected message to specified email addresses.
 
 * When forwarding a copy of an infected message, the *Helper* adds an *X-DrWeb-Seen:* header to the processed message to avoid double processing or message looping.
 
 ### Installation
+
+The *Helper* configuration file [drweb-cgp.yml](drweb-cgp.yml) is located by default in the same directory as the **rspamd-cgp** executable. An alternative configuration file path can be specified via the command line. All available settings are described in detail within the configuration file.
 
 > Below are the *Helper* and *Rule* settings in the *CommuniGate Pro* interface.
 
