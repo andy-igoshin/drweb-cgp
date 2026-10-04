@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export GOPATH="${HOME}/src/drweb-cgp"
+export GOPATH="${HOME}/src/drweb-cgp/.gopath"
 
 VERSION=$(git describe --tags --always 2>/dev/null || echo "manual")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -47,6 +47,7 @@ case "$1" in
         ;;
     *)
         echo "Building version $VERSION..."
+        go vet ./...
         go build -ldflags="$LDFLAGS" -o drweb-cgp
         ;;
 esac
