@@ -195,7 +195,9 @@ func NewMessage(seq int, filename string) (*Message, error) {
 
 	msg.BodyPos = pos
 
-	_, err = msg.File.Seek(pos, io.SeekStart)
+	// Позиционируемся на начало RFC822-заголовков (после CGP-конверта),
+	// чтобы антивирус проверял всё сообщение целиком (заголовки + тело).
+	_, err = msg.File.Seek(msg.HdrPos, io.SeekStart)
 
 	return msg, nil
 }
