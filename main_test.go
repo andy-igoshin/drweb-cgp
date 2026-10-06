@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -157,3 +158,120 @@ func runIntegrationTest(t *testing.T, useUnix bool) {
 
 func TestFullIntegration_Unix(t *testing.T) { runIntegrationTest(t, true) }
 func TestFullIntegration_TCP(t *testing.T)  { runIntegrationTest(t, false) }
+
+// TestScan_StreamContainsHeadersAndBody проверяет, что по INSTREAM (TCP)
+// в антивирус уходит RFC822-заголовки + тело сообщения, но НЕ CGP-конверт.
+func TestScan_StreamContainsHeadersAndBody(t *testing.T) {
+	// Мок DrWeb, который захватывает переданные по INSTREAM байты.
+	var captured bytes.Buffer
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if strings.Contains(line, "INSTREAM") {
+						// Читаем чанки (4 байта размера + данные) до нулевого терминатора.
+						for {
+							var size uint32
+							if err := binary.Read(r, binary.BigEndian, &size); err != nil || size == 0 {
+								break
+							}
+							if _, err := io.CopyN(&captured, r, int64(size)); err != nil {
+								return
+							}
+						}
+						c.Write([]byte("stream: OK\n"))
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	// Конфиг с mock-адресом.
+	tmpDir := t.TempDir()
+	confPath := filepath.Join(tmpDir, "drweb-cgp.yml")
+	os.WriteFile(confPath, []byte(fmt.Sprintf("host: %s\ntimeout: 5s\n", l.Addr().String())), 0644)
+
+	// Файл сообщения: CGP-конверт + пустая строка + RFC822-заголовки + пустая строка + тело.
+	qid := 2027
+	msgPath := filepath.Join(tmpDir, fmt.Sprintf("%d.msg", qid))
+	msgContent := "P 100 <s@t.com>\n" +
+		"S <r@t.com> SMTP [1.1.1.1]\n" +
+		"\n" +
+		"Received: from mail.example.com ([1.2.3.4]) by mx.example.com\n" +
+		"Subject: Virus scan test\n" +
+		"\n" +
+		"Test body content"
+	os.WriteFile(msgPath, []byte(msgContent), 0644)
+
+	// Пайпы для stdin/stdout хелпера.
+	inR, inW, _ := os.Pipe()
+	outR, outW, _ := os.Pipe()
+
+	oldStdin, oldStdout, oldArgs := os.Stdin, os.Stdout, os.Args
+	defer func() {
+		os.Stdin, os.Stdout, os.Args = oldStdin, oldStdout, oldArgs
+	}()
+	os.Stdin, os.Stdout = inR, outW
+	os.Args = []string{"drweb-cgp", "-config", confPath}
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.PanicOnError)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer outW.Close()
+		main()
+	}()
+
+	resChan := make(chan string)
+	go func() {
+		scanner := bufio.NewScanner(outR)
+		for scanner.Scan() {
+			resChan <- scanner.Text()
+		}
+		close(resChan)
+	}()
+
+	// Отправляем FILE и ждём подтверждения OK (значит сканирование завершено).
+	fmt.Fprintf(inW, "%d FILE %s\n", qid, msgPath)
+	res, ok := <-resChan
+	if !ok || !strings.Contains(res, fmt.Sprintf("%d OK", qid)) {
+		t.Fatalf("Unexpected result: %s", res)
+	}
+
+	fmt.Fprintln(inW, "999 QUIT")
+	inW.Close()
+	wg.Wait()
+
+	got := captured.String()
+	if !strings.HasPrefix(got, "Received: from mail.example.com") {
+		t.Errorf("scan stream must start with RFC822 headers, got prefix: %q", got)
+	}
+	if !strings.Contains(got, "Subject: Virus scan test") {
+		t.Errorf("scan stream must contain headers, got: %q", got)
+	}
+	if !strings.Contains(got, "Test body content") {
+		t.Errorf("scan stream must contain body, got: %q", got)
+	}
+	if strings.Contains(got, "P 100 <s@t.com>") {
+		t.Errorf("scan stream must NOT contain CGP envelope, got: %q", got)
+	}
+}
