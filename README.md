@@ -1,6 +1,6 @@
 [![English](https://img.shields.io/badge/lang-en-blue.svg)](#) [![Russian](https://img.shields.io/badge/lang-ru-lightgrey.svg)](README.ru.md)
 
-## DrWeb helper for CommuniGate Pro 6.x, *version 2.1.0*
+## DrWeb helper for CommuniGate Pro 6.x, *version 2.2.0*
 
 ### Introduction
 
@@ -26,7 +26,7 @@
 
 ### Installation
 
-The *Helper* configuration file [drweb-cgp.yml](drweb-cgp.yml) is located by default in the same directory as the **rspamd-cgp** executable. An alternative configuration file path can be specified via the command line. All available settings are described in detail within the configuration file.
+The *Helper* configuration file [drweb-cgp.yml](drweb-cgp.yml) is located by default in the same directory as the **drweb-cgp** executable. An alternative configuration file path can be specified via the command line. All available settings are described in detail within the configuration file.
 
 > Below are the *Helper* and *Rule* settings in the *CommuniGate Pro* interface.
 
@@ -41,33 +41,33 @@ The *Helper* configuration file [drweb-cgp.yml](drweb-cgp.yml) is located by def
 
 ```
     Usage of drweb-cgp:
+      -config string
+            Path to configuration file (default "drweb-cgp.yml")
+      -configdump
+            Dump configuration and exit
+      -configtest
+            Test configuration syntax and exit
       -debug
-            Export debug information (for developers)
-      -host string
-            DrWeb host to connect (default "/run/.com.drweb.clamd")
-      -mirror-to string
-            Mirror selected messages to email
-      -timeout duration
-            DrWeb request timeout (default 3m0s)
+            Enable debug logging
       -version
             Print version and exit
 ```
 
+**config**
+
+Specifies an alternative configuration file.
+
+**configdump**
+
+Outputs the configuration file in a formatted form.
+
+**configtest**
+
+Checks the configuration file for syntax errors.
+
 **debug**
 
 In -debug mode, the helper saves copies of problematic files (those that could not be read or processed) in the *CommuniGate Pro* *BadFiles* directory for further analysis by the developer.
-
-**host**
-
-Path to the UNIX socket or a network address (IP or hostname). If the port is not specified, *3310* is used.
-
-**mirror-to**
-
-A comma-separated list of email addresses where copies of infected messages will be forwarded.
-
-**timeout**
-
-The processing timeout for a single message in *DrWeb*.
 
 </br>
 
