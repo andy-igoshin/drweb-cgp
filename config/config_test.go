@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-// Тесты фиксируют, что config.New больше не вызывает os.Exit для
-// -configtest / -configdump, а возвращает Config с выставленными флагами
-// (решение о завершении принимает main). До исправления эти вызовы
-// завершали бы тестовый процесс.
-
 func writeTestConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -108,5 +103,56 @@ func TestNew_ExplicitTimeout_Preserved(t *testing.T) {
 
 	if c.Timeout != 7*time.Second {
 		t.Errorf("expected explicit timeout 7s, got %v", c.Timeout)
+	}
+}
+
+func TestEnsurePort(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"hostname no port", "mail.example.com", "mail.example.com:3310"},
+		{"IPv4 no port", "1.2.3.4", "1.2.3.4:3310"},
+		{"IPv4 with port", "1.2.3.4:9999", "1.2.3.4:9999"},
+		{"hostname with port", "mail.example.com:1234", "mail.example.com:1234"},
+		{"bare IPv6 literal", "::1", "[::1]:3310"},
+		{"full IPv6 literal", "2001:db8::1", "[2001:db8::1]:3310"},
+		{"IPv6 with port", "[::1]:9999", "[::1]:9999"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ensurePort(tt.in); got != tt.want {
+				t.Errorf("ensurePort(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPostProcess_Transport(t *testing.T) {
+	tests := []struct {
+		name      string
+		host      string
+		wantProto TrType
+		wantHost  string
+	}{
+		{"unix path", "/run/.com.drweb.clamd", TrUnix, "/run/.com.drweb.clamd"},
+		{"hostname", "mail.example.com", TrTcp, "mail.example.com:3310"},
+		{"ipv6 bare", "::1", TrTcp, "[::1]:3310"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Config{Host: tt.host}
+			c.postProcess()
+
+			if c.transport != tt.wantProto {
+				t.Errorf("transport = %v, want %v", c.transport, tt.wantProto)
+			}
+			if c.Host != tt.wantHost {
+				t.Errorf("host = %q, want %q", c.Host, tt.wantHost)
+			}
+		})
 	}
 }

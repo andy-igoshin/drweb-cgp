@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -53,9 +54,7 @@ func (c *Config) postProcess() {
 		c.transport = TrUnix
 	} else {
 		c.transport = TrTcp
-		if !strings.Contains(c.Host, ":") {
-			c.Host += ":3310"
-		}
+		c.Host = ensurePort(c.Host)
 	}
 
 	c.allowMap = make(map[string]struct{})
@@ -73,4 +72,21 @@ func (c *Config) postProcess() {
 			c.denyMap[d] = struct{}{}
 		}
 	}
+}
+
+// ensurePort добавляет порт по умолчанию :3310, если он не указан.
+// Корректно обрабатывает IPv6-литералы (требуют квадратных скобок) и
+// адреса с уже заданным портом.
+func ensurePort(host string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		// Порт уже указан (включая "[::1]:3310").
+		return host
+	}
+
+	// Порт отсутствует. Голый IPv6-литерал требует скобок.
+	if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+		return "[" + host + "]:3310"
+	}
+
+	return host + ":3310"
 }
