@@ -20,11 +20,15 @@ func dumpConfig(c *Config) {
 	fmt.Println("showVersion:", c.showVersion)
 }
 
-func loadFile(path string) (*Config, error) {
-	c := &Config{}
+const (
+	defaultHost    = "/run/.com.drweb.clamd"
+	defaultTimeout = 180 * time.Second
+)
 
-	c.Host = "/run/.com.drweb.clamd"
-	c.Timeout = 180 * time.Second
+func loadFile(path string) (*Config, error) {
+	c := &Config{
+		Host: defaultHost,
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -33,6 +37,11 @@ func loadFile(path string) (*Config, error) {
 
 	if err := yaml.Unmarshal(data, c); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
+	}
+
+	// Если timeout не задан в конфиге (нулевое значение), применяем default.
+	if c.Timeout == 0 {
+		c.Timeout = defaultTimeout
 	}
 
 	c.postProcess()
