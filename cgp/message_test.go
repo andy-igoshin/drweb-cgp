@@ -1,6 +1,7 @@
 package cgp
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -114,4 +115,31 @@ func TestNewMessage_Malformed(t *testing.T) {
 			t.Errorf("Expected EOF error, got: %v", err)
 		}
 	})
+}
+
+// Тест VerifyDKIM: письмо без DKIM-Signature должно вернуть ErrDKIMNoSignature.
+func TestVerifyDKIM_NoSignature(t *testing.T) {
+	mock := &MessageMock{
+		Envelope: []string{"P <sender@domain.name>", "S SMTP [1.2.3.4]"},
+		Headers:  []string{"Subject: no dkim", "From: sender@domain.name"},
+		Body:     "Hello",
+	}
+	fname := createTestFile(t, 40001, mock.Render())
+
+	msg, err := NewMessage(1, fname)
+	if err != nil {
+		t.Fatalf("NewMessage failed: %v", err)
+	}
+	defer msg.Close()
+
+	domain, err := msg.VerifyDKIM()
+	if err == nil {
+		t.Fatal("expected error for message without DKIM signature")
+	}
+	if !errors.Is(err, ErrDKIMNoSignature) {
+		t.Errorf("expected ErrDKIMNoSignature, got %v", err)
+	}
+	if domain != "" {
+		t.Errorf("expected empty domain, got %q", domain)
+	}
 }

@@ -3,6 +3,7 @@ package cgp
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,12 @@ import (
 	"github.com/emersion/go-msgauth/dkim"
 
 	"git.vsu.ru/ai/drweb-cgp/utils"
+)
+
+// Sentinel-ошибки для различимых исходов проверки DKIM.
+var (
+	ErrDKIMNoSignature = errors.New("dkim: no signature found")
+	ErrDKIMInvalid     = errors.New("dkim: invalid signature")
 )
 
 type Message struct {
@@ -222,17 +229,22 @@ func (m *Message) VerifyDKIM() (string, error) {
 	// 3. Вызываем проверку
 	verifications, err := dkim.VerifyWithOptions(m.File, options)
 	if err != nil {
-		return "", nil // Ошибка парсинга или отсутствие подписей
+		return "", fmt.Errorf("dkim verify: %w", err)
 	}
 
 	// 4. Ищем успешный результат
+	found := false
 	for _, v := range verifications {
 		if v.Err == nil {
 			return strings.ToLower(v.Domain), nil
 		}
+		found = true
 	}
 
-	return "", nil
+	if found {
+		return "", ErrDKIMInvalid
+	}
+	return "", ErrDKIMNoSignature
 }
 
 func getReader(r io.Reader) *bufio.Reader {

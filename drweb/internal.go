@@ -1,6 +1,7 @@
 package drweb
 
 import (
+	"errors"
 	"strings"
 
 	"git.vsu.ru/ai/drweb-cgp/cgp"
@@ -17,7 +18,19 @@ func handleNotifications(seq int, msg *cgp.Message, virusName string) {
 		}
 	} else if config.IsExternalNotifyEnabled() {
 		// Внешний пользователь: проверка DKIM + Alignment
-		dkimDomain, _ := msg.VerifyDKIM()
+		dkimDomain, err := msg.VerifyDKIM()
+		if err != nil {
+			// Технические сбои (seek/парсинг/DNS) логируем всегда,
+			// ожидаемые отрицательные исходы — только в debug.
+			if errors.Is(err, cgp.ErrDKIMNoSignature) ||
+				errors.Is(err, cgp.ErrDKIMInvalid) {
+				if config.Debug() {
+					cgp.Putline("* ", seq, " [", msg.QID, "]: ", err)
+				}
+			} else {
+				cgp.Putline("* ", seq, " [", msg.QID, "]: dkim verify error: ", err)
+			}
+		}
 		if dkimDomain != "" {
 			fromDomain := extractDomain(msg.From)
 			// Проверяем соответствие домена подписи и домена в MAIL FROM
