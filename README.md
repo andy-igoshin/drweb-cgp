@@ -1,6 +1,6 @@
 [![English](https://img.shields.io/badge/lang-en-blue.svg)](#) [![Russian](https://img.shields.io/badge/lang-ru-lightgrey.svg)](README.ru.md)
 
-## DrWeb helper for CommuniGate Pro 6.x, *version 2.2.0*
+## DrWeb helper for CommuniGate Pro 6.x, *version 2.2.8*
 
 ### Introduction
 
