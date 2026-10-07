@@ -46,11 +46,30 @@ type Config struct {
 	debug       bool
 	transport   TrType
 	showVersion bool
+	configDump  bool
+	configTest  bool
 }
 
 var configInstance *Config
 
+func ConfigDump() bool {
+	if configInstance == nil {
+		return false
+	}
+	return configInstance.configDump
+}
+
+func ConfigTest() bool {
+	if configInstance == nil {
+		return false
+	}
+	return configInstance.configTest
+}
+
 func Debug() bool {
+	if configInstance == nil {
+		return false
+	}
 	return configInstance.debug
 }
 
@@ -60,14 +79,24 @@ func GetVersion() string {
 }
 
 func Host() string {
+	if configInstance == nil {
+		return ""
+	}
 	return configInstance.Host
 }
 
 func IsAuthNotifyEnabled() bool {
+	if configInstance == nil {
+		return false
+	}
 	return configInstance.Notifications.Authenticated
 }
 
 func IsDomainAllowed(domain string) bool {
+	if configInstance == nil {
+		return false
+	}
+
 	domain = strings.ToLower(strings.TrimSpace(domain))
 
 	if _, denied := configInstance.denyMap[domain]; denied {
@@ -83,10 +112,16 @@ func IsDomainAllowed(domain string) bool {
 }
 
 func IsExternalNotifyEnabled() bool {
+	if configInstance == nil {
+		return false
+	}
 	return configInstance.Notifications.External.Enable
 }
 
 func MirrorTo() []string {
+	if configInstance == nil {
+		return []string{}
+	}
 	return configInstance.MirrorTo
 }
 
@@ -100,15 +135,15 @@ func New(args []string) (*Config, error) {
 		dir = "."
 	}
 
-	var configPath string
-	var configDump bool
-	var configTest bool
+	var configpath string
+	var configdump bool
+	var configtest bool
 	var debug bool
 	var version bool
 
-	fs.StringVar(&configPath, "config", filepath.Join(dir, "drweb-cgp.yml"), "Path to configuration file")
-	fs.BoolVar(&configDump, "configdump", false, "Dump configuration and exit")
-	fs.BoolVar(&configTest, "configtest", false, "Test configuration syntax and exit")
+	fs.StringVar(&configpath, "config", filepath.Join(dir, "drweb-cgp.yml"), "Path to configuration file")
+	fs.BoolVar(&configdump, "configdump", false, "Dump configuration and exit")
+	fs.BoolVar(&configtest, "configtest", false, "Test configuration syntax and exit")
 	fs.BoolVar(&debug, "debug", false, "Enable debug logging")
 	fs.BoolVar(&version, "version", false, "Print version and exit")
 
@@ -120,7 +155,7 @@ func New(args []string) (*Config, error) {
 		return &Config{showVersion: true}, nil
 	}
 
-	c, err := loadFile(configPath)
+	c, err := loadFile(configpath)
 	if err != nil {
 		return nil, err
 	}
@@ -128,24 +163,33 @@ func New(args []string) (*Config, error) {
 	c.debug = debug
 	c.showVersion = version
 
-	if configTest {
-		fmt.Println("config: Syntax OK")
-		os.Exit(0)
+	if configdump {
+		dumpConfig(c)
+		c.configDump = true
+		return c, nil
 	}
 
-	if configDump {
-		dumpConfig(c)
-		os.Exit(0)
+	if configtest {
+		fmt.Println("config: Syntax OK")
+		c.configTest = true
+		return c, nil
 	}
 
 	return c, nil
 }
 
 func NotifyFrom() string {
+	if configInstance == nil {
+		return ""
+	}
 	return configInstance.Notifications.From
 }
 
 func Proto() string {
+	if configInstance == nil {
+		return ""
+	}
+
 	if configInstance.transport == TrUnix {
 		return "unix"
 	}
@@ -157,13 +201,22 @@ func SetGlobal(c *Config) {
 }
 
 func ShowVersion() bool {
+	if configInstance == nil {
+		return false
+	}
 	return configInstance.showVersion
 }
 
 func Timeout() time.Duration {
+	if configInstance == nil {
+		return defaultTimeout
+	}
 	return configInstance.Timeout
 }
 
 func Transport() TrType {
+	if configInstance == nil {
+		return TrUnknown
+	}
 	return configInstance.transport
 }

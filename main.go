@@ -22,10 +22,14 @@ func main() {
 
 	conf, err := config.New(os.Args[1:])
 	if err != nil {
-		os.Stderr.WriteString("Error: " + err.Error() + "\n")
+		os.Stderr.WriteString("config: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 	config.SetGlobal(conf)
+
+	if config.ConfigDump() || config.ConfigTest() {
+		return
+	}
 
 	if config.ShowVersion() {
 		os.Stderr.WriteString(config.GetVersion())
