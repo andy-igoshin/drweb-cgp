@@ -1,4 +1,5 @@
 drweb-cgp
+.vscode/
 *.CU*
 *.msg
 *.out
